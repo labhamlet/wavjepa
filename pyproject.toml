@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "signal-jepa"
+version = "0.1.0"
+description = "Signal-based Joint-Embedding Predictive Architecture (S-JEPA)"
+authors = ["Pierre Guetschel <pierre.guetschel@gmail.com>"]
+readme = "README.md"
+packages = [{ include = "sjepa" }]
+license = "BSD-3-Clause"
+repository = "https://github.com/PierreGtch/signal-jepa"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+torch = "^2.2.1"
+torchmetrics = "^1.0.0"
+torchdata = "^0.7.1"
+torchaudio = "^2.1.1"
+lightning = "^2.1.2"
+pytorch-metric-learning = "^2.2.0"
+wandb = "^0.15.5"
+torchtext = "^0.16.1"
+matplotlib = "^3.8"
+webdataset = "^0.2.111"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+ruff = "^
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

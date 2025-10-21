@@ -1,0 +1,7 @@
+conv_layers_spec: "[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)]"
+dropout: 0.0
+mode: default
+conv_bias: False
+name : spatial-conv-channel-extractor
+depthwise : False
+share_weights_over_channels : False

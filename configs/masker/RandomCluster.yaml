@@ -1,0 +1,7 @@
+target_masks_per_context : 4
+context_cluster_d : 0.2
+context_cluster_u : 0.3
+target_cluster_d : 0.3
+target_cluster_u : 0.4
+channel_based_masking : False
+name: random-cluster-masker
