@@ -4,6 +4,7 @@ temp*
 tmp*
 slurm*
 checkpoints
+.ruff_cache/
 
 /cluster/
 /Archive/
