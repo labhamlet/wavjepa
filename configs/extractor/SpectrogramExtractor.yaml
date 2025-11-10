@@ -1,9 +1,0 @@
-n_mels : 128
-embedding_dim : 768
-fshape : 16
-tshape : 8
-fstride : 16
-tstride: 8
-name : spectrogram
-depthwise: False
-trainable : False
