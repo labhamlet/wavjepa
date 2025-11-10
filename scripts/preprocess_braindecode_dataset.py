@@ -5,9 +5,9 @@ Useful for TUH for example.
 """
 
 from pathlib import Path
-from braindecode.preprocessing import preprocess, Preprocessor
 
 from braindecode.datasets.base import BaseConcatDataset
+from braindecode.preprocessing import Preprocessor, preprocess
 
 
 def select_by_channels(ds: BaseConcatDataset, ch_names: list[str]) -> BaseConcatDataset:

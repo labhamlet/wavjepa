@@ -3,7 +3,6 @@
 # Convolves the noise audio with the noise RIRs
 
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -35,7 +34,7 @@ def apply_fadeout(audio: torch.Tensor, sr: int, duration: float = 0.10) -> torch
     return audio
 
 
-def load_rir(path: str) -> Optional[torch.Tensor]:
+def load_rir(path: str) -> torch.Tensor | None:
     assert Path(path).exists(), "Path {path} does not exist"
     try:
         rir = torch.tensor(np.load(path))
@@ -67,7 +66,7 @@ def add_noise(
     waveform: torch.Tensor,
     noise: torch.Tensor,
     snr: torch.Tensor,
-    lengths: Optional[torch.Tensor] = None,
+    lengths: torch.Tensor | None = None,
 ) -> torch.Tensor:
     r"""Scales and adds noise to waveform per signal-to-noise ratio.
 
@@ -112,7 +111,7 @@ def add_noise(
 
     L = waveform.size(-1)
 
-    if L != noise.size(-1):
+    if noise.size(-1) != L:
         raise ValueError(
             f"Length dimensions of waveform and noise don't match (got {L} and {noise.size(-1)})."
         )

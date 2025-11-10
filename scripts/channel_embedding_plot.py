@@ -1,9 +1,9 @@
 import matplotlib.pyplot as plt
-from umap import UMAP
-import numpy as np
 import mne
-from mne.channels.layout import _pol_to_cart, _cart_to_sph
+import numpy as np
+from mne.channels.layout import _cart_to_sph, _pol_to_cart
 from mne.viz.evoked import _rgb
+from umap import UMAP
 
 from sjepa.functions import pos_encode_continuous
 

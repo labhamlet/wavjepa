@@ -1,11 +1,11 @@
-from pathlib import Path
 from math import ceil
+from pathlib import Path
 
-import wandb
-import pandas as pd
-from umap import UMAP
 import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
+import wandb
+from umap import UMAP
 
 
 def main(

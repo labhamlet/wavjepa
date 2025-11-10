@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchaudio.transforms as T
-
 from einops import repeat
 
 from .scene_module import generate_scenes

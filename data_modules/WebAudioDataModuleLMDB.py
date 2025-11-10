@@ -1,13 +1,14 @@
-from torch.utils.data import DataLoader
-import pytorch_lightning as pl
-import webdataset as wds
-from .dataset_functions import pre_process_audio
-from .scene_module import generate_scenes
-import torch
 import multiprocessing as mp
 import queue
 import random
-from typing import List
+
+import pytorch_lightning as pl
+import torch
+import webdataset as wds
+from torch.utils.data import DataLoader
+
+from .dataset_functions import pre_process_audio
+from .scene_module import generate_scenes
 
 
 def mask_to_indices(mask: torch.BoolTensor, check: bool = False) -> torch.Tensor:
@@ -45,8 +46,8 @@ def mask_to_indices(mask: torch.BoolTensor, check: bool = False) -> torch.Tensor
 
 # using cluster for frame masking hurts the performance, so just use the naive random sampling
 def gen_maskid_frame_tgt(masked_patches: torch.Tensor, mask_size: int = 100):
-    indices: List[int] = masked_patches.nonzero().flatten().tolist()  # type: ignore
-    mask_id: List[int] = random.sample(indices, mask_size)
+    indices: list[int] = masked_patches.nonzero().flatten().tolist()  # type: ignore
+    mask_id: list[int] = random.sample(indices, mask_size)
     return torch.tensor(mask_id)
 
 

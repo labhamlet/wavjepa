@@ -104,4 +104,17 @@ dev = [
 ]
 
 [tool.ruff.lint]
-extend-select = ["B"]
+extend-select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # flake8-bugbear
+    "B",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
+]

@@ -1,4 +1,3 @@
-from typing import Optional
 
 import torch
 
@@ -8,14 +7,14 @@ from .scene_module import generate_scene
 
 class Augmenter:
     def __init__(
-        self, spatial_scene_iter: Optional[SceneIterator], sr: int, snr: Optional[int]
+        self, spatial_scene_iter: SceneIterator | None, sr: int, snr: int | None
     ):
         self.spatial_scene_iter = spatial_scene_iter
         self.sr = sr
         self.snr = snr
 
     def augment(
-        self, audio: torch.Tensor, noise: Optional[torch.Tensor] = None
+        self, audio: torch.Tensor, noise: torch.Tensor | None = None
     ) -> torch.Tensor:
         """
         Augment audio with spatial scene processing.

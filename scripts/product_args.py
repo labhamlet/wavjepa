@@ -1,7 +1,7 @@
-from argparse import ArgumentParser
-from numbers import Real
-from math import prod
 import sys
+from argparse import ArgumentParser
+from math import prod
+from numbers import Real
 
 
 def check_arguments(arguments: list[tuple[str, list]]):

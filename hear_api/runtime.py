@@ -2,9 +2,11 @@ import sys
 
 sys.path.append("..")
 import torch
-from .feature_helper import FeatureExtractor
+
 from sjepa.jepa import JEPA
 from sjepa.types import TransformerEncoderCFG, TransformerLayerCFG
+
+from .feature_helper import FeatureExtractor
 
 
 def normalize(audio):

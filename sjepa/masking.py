@@ -1,14 +1,15 @@
-from torch import nn
-from einops import repeat, rearrange
-import torch
 from random import randrange
 
+import torch
+from einops import rearrange, repeat
+from torch import nn
+
 from sjepa.audio_masking import (
+    compute_mask_indices,
+    gen_maskid_patch,
+    gen_maskid_patch_tgt,
     gen_targetid_cluster,
     gen_targetid_random,
-    gen_maskid_patch_tgt,
-    gen_maskid_patch,
-    compute_mask_indices,
 )
 
 

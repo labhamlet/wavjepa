@@ -1,6 +1,6 @@
 import inspect
+
 import torch
-from typing import Tuple
 
 
 def has_len(v):
@@ -82,7 +82,7 @@ def set_at_index(
     return torch.scatter(tokens, 1, index, value)
 
 
-def repeat_token(token: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
+def repeat_token(token: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
     """Repeats a token size times.
 
     Args:

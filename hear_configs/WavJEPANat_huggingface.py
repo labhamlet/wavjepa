@@ -1,5 +1,5 @@
-from transformers import AutoModel, AutoFeatureExtractor
 import torch
+from transformers import AutoFeatureExtractor, AutoModel
 
 extractor = AutoFeatureExtractor.from_pretrained(
     "labhamlet/wavjepa-nat-base", trust_remote_code=True

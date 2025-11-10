@@ -7,24 +7,22 @@ from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from utils import get_identity_from_cfg
 from data_modules import WebAudioDataModuleLMDB
-
-from sjepa.jepa import JEPA
-from sjepa.masking import (
-    RandomClusterMaskMaker,
-    RandomMaskMaker,
-    TimeInverseBlockMasker,
-    MultiBlockMaskMaker,
-)
 from sjepa.extractors import (
-    ConvFeatureExtractor,
     ConvChannelFeatureExtractor,
+    ConvFeatureExtractor,
     Extractor,
     SpectrogramPatchExtractor,
 )
+from sjepa.jepa import JEPA
+from sjepa.masking import (
+    MultiBlockMaskMaker,
+    RandomClusterMaskMaker,
+    RandomMaskMaker,
+    TimeInverseBlockMasker,
+)
 from sjepa.types import TransformerEncoderCFG, TransformerLayerCFG
-
+from utils import get_identity_from_cfg
 
 ORIGINAL_SR = 32000
 

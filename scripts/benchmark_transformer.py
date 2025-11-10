@@ -1,12 +1,12 @@
 import time
-from pathlib import Path
 from contextlib import nullcontext
 from itertools import product
+from pathlib import Path
 
-from tqdm import tqdm
+import pandas as pd
 import torch
 from torch import nn
-import pandas as pd
+from tqdm import tqdm
 
 device = "cuda:0"
 

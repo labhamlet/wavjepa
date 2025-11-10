@@ -1,8 +1,8 @@
-from typing import Any
 import math
+from typing import Any
 
-import torch
 import einops
+import torch
 
 
 def _no_grad_trunc_normal_(

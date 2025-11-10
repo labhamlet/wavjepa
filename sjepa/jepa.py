@@ -1,30 +1,27 @@
 import copy
-import transformers
-import numpy as np
-
-from typing import List, Any, Optional, Tuple
-
-import torch
-import torchaudio
 import random
-from torch import nn
-from einops import repeat, rearrange
-import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
+from typing import Any
+
+import numpy as np
 import pytorch_lightning as pl
+import torch
+import torch.nn.functional as F
+import torchaudio
+import transformers
+from einops import rearrange, repeat
+from torch import nn
+from torch.utils.checkpoint import checkpoint
 
-
+from data_modules.dataset_functions import pad_or_truncate_batch
+from data_modules.scene_module import generate_scenes_batch
+from sjepa.extractors.audio_extractor import Extractor
+from sjepa.functions import trunc_normal_
 from sjepa.pos_embed import (
     get_1d_sincos_pos_embed_from_grid,
     get_2d_sincos_pos_embed,
     get_binaural_pos_embed,
 )
-
-from sjepa.functions import trunc_normal_
-from sjepa.extractors.audio_extractor import Extractor
-from sjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
-from data_modules.scene_module import generate_scenes_batch
-from data_modules.dataset_functions import pad_or_truncate_batch
+from sjepa.types import ForwardReturn, TransformerEncoderCFG, TransformerLayerCFG
 
 ORIGINAL_SR = 32000
 
@@ -32,7 +29,7 @@ ORIGINAL_SR = 32000
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
 
 
-def collate_fn(batch: List[torch.Tensor]) -> torch.Tensor:
+def collate_fn(batch: list[torch.Tensor]) -> torch.Tensor:
     return batch.flatten(start_dim=0, end_dim=1)
 
 
@@ -165,7 +162,7 @@ class JEPA(pl.LightningModule):
             norm=nn.LayerNorm(self.encoder_embedding_dim),
             **transformer_encoder_cfg,
         )
-        self.post_extraction_mapper: Optional[nn.Module] = (
+        self.post_extraction_mapper: nn.Module | None = (
             nn.Linear(feature_extractor.embedding_dim, self.encoder_embedding_dim)
             if feature_extractor.embedding_dim != self.encoder_embedding_dim
             else None
@@ -329,7 +326,7 @@ class JEPA(pl.LightningModule):
             "lr_scheduler": {"scheduler": cosine_annealing, "interval": "step"},
         }
 
-    def _make_targets(self, layer_outputs: List[torch.Tensor]):
+    def _make_targets(self, layer_outputs: list[torch.Tensor]):
         """
         Predicting targets which are the average of multiple layers is more robust than
         predicting only the top most layer (K = 1) for most modalities.
@@ -383,8 +380,8 @@ class JEPA(pl.LightningModule):
 
     @torch.no_grad()
     def prepare_batch(
-        self, batch: Tuple[torch.Tensor, ...]
-    ) -> Tuple[torch.Tensor, ...]:
+        self, batch: tuple[torch.Tensor, ...]
+    ) -> tuple[torch.Tensor, ...]:
         """
         Prepare the batch before the training step.
         Generates the naturalistic scenes on GPU.
@@ -609,7 +606,7 @@ class JEPA(pl.LightningModule):
         contextual_features: torch.Tensor,
         ctx_mask: torch.BoolTensor,
         nr_targets: int,
-        src_key_padding_mask: Optional[torch.BoolTensor] = None,
+        src_key_padding_mask: torch.BoolTensor | None = None,
     ) -> torch.Tensor:
         B = ctx_mask.shape[0]
         # Prepare the mask tokens.
@@ -637,7 +634,7 @@ class JEPA(pl.LightningModule):
     def encoder_forward(
         self,
         x_contexts: torch.Tensor,
-        src_key_padding_mask: Optional[torch.BoolTensor] = None,
+        src_key_padding_mask: torch.BoolTensor | None = None,
     ) -> torch.Tensor:
         if self.use_gradient_checkpointing and self.training:
             contextual_features = checkpoint(

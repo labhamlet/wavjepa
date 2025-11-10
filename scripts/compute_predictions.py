@@ -1,17 +1,15 @@
 from pathlib import Path
 
-import numpy as np
-from mne import events_from_annotations
-from torchinfo import summary
-import wandb
 import lightning.pytorch as pl
-from torch.utils.data import DataLoader
-
-from braindecode.preprocessing import create_windows_from_events
+import numpy as np
+import wandb
 from braindecode.datautil import load_concat_dataset
-
-from sjepa.eeg_jepa import EegJepa
+from braindecode.preprocessing import create_windows_from_events
+from mne import events_from_annotations
 from sjepa.braindecode_datamodule import wrapp_windows
+from sjepa.eeg_jepa import EegJepa
+from torch.utils.data import DataLoader
+from torchinfo import summary
 
 
 def main(trainer: pl.Trainer, epoch_eps=0.1, run_id="ln3q8v7q", log_wandb=False):

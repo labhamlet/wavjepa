@@ -1,4 +1,5 @@
 import torch
+
 from hear_api.runtime import RuntimeJEPA
 from sjepa.extractors import SpectrogramPatchExtractor
 

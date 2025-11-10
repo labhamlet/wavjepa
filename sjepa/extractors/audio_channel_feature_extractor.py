@@ -1,11 +1,9 @@
 from math import prod
 
 import torch
-from torch import nn
-from einops.layers.torch import Rearrange
 from einops import rearrange
-
-from typing import List, Optional
+from einops.layers.torch import Rearrange
+from torch import nn
 
 from .audio_extractor import Extractor
 
@@ -196,7 +194,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
         return processed.shape[1]  # Return time dimension size
 
     @property
-    def receptive_fields(self) -> List[int]:
+    def receptive_fields(self) -> list[int]:
         rf = 1
         receptive_fields = [rf]
         for _, width, stride in reversed(self.conv_layers_spec):
@@ -205,7 +203,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
         return list(reversed(receptive_fields))
 
     def description(
-        self, sfreq: Optional[int] = None, dummy_time: Optional[int] = None
+        self, sfreq: int | None = None, dummy_time: int | None = None
     ) -> str:
         dims, _, strides = zip(*self.conv_layers_spec)
         receptive_fields = self.receptive_fields

@@ -3,7 +3,6 @@ import json
 import os
 import threading
 from random import randrange
-from typing import Dict, List
 
 import numpy as np
 import torch
@@ -54,12 +53,12 @@ class SceneIterator:
         max_noise_sources=5,
     ):
         print(scenes, flush=True)
-        scenes_json: List[str] = glob.glob(f"{scenes}/*.json")
-        self.scenes: List[Dict[str, dict]] = []
+        scenes_json: list[str] = glob.glob(f"{scenes}/*.json")
+        self.scenes: list[dict[str, dict]] = []
         self.max_len = 0
         self.rir_data_dir = rir_data_dir
         for scene in scenes_json:
-            with open(scene, "r") as f:
+            with open(scene) as f:
                 data = json.load(f)
                 self.scenes.extend(data["sampled_regions"])
                 self.max_len += len(data["sampled_regions"])

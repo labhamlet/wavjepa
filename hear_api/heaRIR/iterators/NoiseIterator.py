@@ -1,6 +1,5 @@
 import glob
 from random import randrange
-from typing import List
 
 import torch
 import torchaudio
@@ -12,7 +11,7 @@ class NoiseIterator:
     """
 
     def __init__(self, noise_dir: str):
-        self.noise_files: List[str] = glob.glob(f"{noise_dir}/*.wav")
+        self.noise_files: list[str] = glob.glob(f"{noise_dir}/*.wav")
         self.max_len: int = len(self.noise_files)
 
     def __iter__(self):

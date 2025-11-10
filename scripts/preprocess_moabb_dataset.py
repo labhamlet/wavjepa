@@ -6,12 +6,12 @@ Useful for Lee2019 (54 subjects, ~80GB) for example.
 """
 
 from pathlib import Path
-import yaml
-from tqdm import tqdm
-from braindecode.datasets import MOABBDataset
-from braindecode.preprocessing import preprocess, Preprocessor
 
+import yaml
+from braindecode.datasets import MOABBDataset
+from braindecode.preprocessing import Preprocessor, preprocess
 from moabb.datasets.utils import dataset_list
+from tqdm import tqdm
 
 dataset_name_map = {ds.__name__: ds for ds in dataset_list}
 
@@ -59,7 +59,7 @@ def main(
 
 
 def main_main(config_path: str):
-    with open(config_path, "r") as f:
+    with open(config_path) as f:
         config = yaml.safe_load(f)
     args = ["sfreq", "l_freq", "h_freq", "path", "suffix"]
     kwargs = {k: config[k] for k in args}

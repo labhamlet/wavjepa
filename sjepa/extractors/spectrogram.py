@@ -1,6 +1,7 @@
-import torchaudio
 import torch
+import torchaudio
 from torch import nn
+
 from .audio_extractor import Extractor
 
 

@@ -1,4 +1,5 @@
 import torch
+
 from hear_api.runtime_natjepa import RuntimeNatJEPA
 from sjepa.extractors import ConvChannelFeatureExtractor
 

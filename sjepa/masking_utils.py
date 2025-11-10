@@ -1,7 +1,7 @@
 from math import ceil
 
-import torch
 import einops
+import torch
 
 
 def time_inverse_block_masking(

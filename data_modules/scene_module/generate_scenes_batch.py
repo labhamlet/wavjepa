@@ -2,7 +2,6 @@
 # Convolves the source audio with the source RIR
 # Convolves the noise audio with the noise RIRs
 
-from typing import List
 
 import torch
 import torchaudio
@@ -88,7 +87,7 @@ def add_noise(
 
     L = waveform.size(-1)
 
-    if L != noise.size(-1):
+    if noise.size(-1) != L:
         raise ValueError(
             f"Length dimensions of waveform and noise don't match (got {L} and {noise.size(-1)})."
         )
@@ -134,7 +133,7 @@ def aggregate_noise(noise_rirs, noise_source):
 
 def process_audio(
     source_rir: torch.Tensor,
-    noise_rirs: List[torch.Tensor],
+    noise_rirs: list[torch.Tensor],
     audio_source: torch.Tensor,
     noise_source: torch.Tensor,
     sr: int,

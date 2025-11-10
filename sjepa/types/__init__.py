@@ -1,6 +1,8 @@
 from .sjepa_configs import (
     ForwardReturn,
-    TransformerLayerCFG as ForwardReturn,
     TransformerEncoderCFG,
     TransformerLayerCFG,
+)
+from .sjepa_configs import (
+    TransformerLayerCFG as ForwardReturn,
 )
