@@ -70,15 +70,20 @@ seed: 42
 We provided HEAR API Inference endpoints for ease of use. However, we recommend to use the huggingface inference endpoints for feature extraction.
 
 ~~~python
+import torch
 from transformers import AutoModel, AutoFeatureExtractor
 
-model = AutoModel.from_pretrained("labhamlet/wavjepa-base", trust_remote_code=True)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+model = AutoModel.from_pretrained("labhamlet/wavjepa-base", trust_remote_code=True).to(device)
 extractor = AutoFeatureExtractor.from_pretrained("labhamlet/wavjepa-base", trust_remote_code=True)
 
-audio = torch.zeros([1,160000])
+audio = torch.zeros([1,160000]).to(device)
 extracted = extractor(audio, return_tensors="pt")
 audio_feature = extracted['input_values']
-print(model(audio_feature).shape)
+result = model(audio_feature)
+print(result[0].shape)
+print(result[1].shape)
 ~~~
 
 Later, you can extract features from our pre-trained wavjepa model and use it in the downstream tasks. 
@@ -86,15 +91,20 @@ Later, you can extract features from our pre-trained wavjepa model and use it in
 Similarly, to use WavJEPA-Nat (Which is inherently a binaural model, but it is also very good in reverberent settings)
 
 ~~~python
+import torch
 from transformers import AutoModel, AutoFeatureExtractor
 
-model = AutoModel.from_pretrained("labhamlet/wavjepa-nat-base", trust_remote_code=True)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+model = AutoModel.from_pretrained("labhamlet/wavjepa-nat-base", trust_remote_code=True).to(device)
 extractor = AutoFeatureExtractor.from_pretrained("labhamlet/wavjepa-nat-base", trust_remote_code=True)
 
-audio = torch.zeros([1,2,160000])
+audio = torch.zeros([1,2,160000]).to(device)
 extracted = extractor(audio, return_tensors="pt")
 audio_feature = extracted['input_values']
-print(model(audio_feature).shape)
+result = model(audio_feature)
+print(result[0].shape)
+print(result[1].shape)
 ~~~
 
 
