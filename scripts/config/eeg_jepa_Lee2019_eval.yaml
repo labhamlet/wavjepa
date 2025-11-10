@@ -1,0 +1,66 @@
+net_conf:
+  base:
+    iterator_train__shuffle: true
+    iterator_train__drop_last: false
+    iterator_train__num_workers: 0
+    iterator_valid__num_workers: 0
+    optimizer__lr: 0.001  # default adam learning rate
+    batch_size: 32
+    max_epochs: 500
+    #    train_split:
+    #      class_path: skorch.dataset.ValidSplit
+    #      init_args:
+    #        cv: 0.2
+    #        stratified: true
+    #        random_state: 12
+    callbacks:
+      - class_path: skorch.callbacks.EarlyStopping
+        init_args:
+          monitor: valid_loss
+          lower_is_better: true
+          patience: 50
+          load_best: true
+  iter:
+    - ft_scheme: lp_local
+      n_jobs: -1 # for cross validation
+    - ft_scheme: lp_local_spatFilt
+      n_jobs: -1
+    - ft_scheme: lp_contextual
+      n_jobs: 1
+    - ft_scheme: ft_local
+      n_jobs: -1
+      make_net:
+        callback_fn_kwargs:
+          warmup_epochs: 10
+    - ft_scheme: ft_local_spatFilt
+      n_jobs: -1
+      make_net:
+        callback_fn_kwargs:
+          warmup_epochs: 10
+    - ft_scheme: ft_contextual
+      n_jobs: 1
+      make_net:
+        callback_fn_kwargs:
+          warmup_epochs: 10
+data_conf:
+  base:
+    factor: 1000000 # 1e6
+    dtype: float32
+    n_jobs: -1
+  iter:
+    - load:
+        path: ~/data/preprocessed_datasets/lee2019-erp_128_0.5-40/
+        length: 1.2 # seconds
+      scoring: roc_auc
+      subjects: [ 48,49,50,51,52,53,54 ]
+    - load:
+        path: ~/data/preprocessed_datasets/lee2019-mi_128_0.5-40/
+        length: 4.2 # seconds
+      scoring: accuracy
+      subjects: [ 48,49,50,51,52,53,54 ]
+    - load:
+        path: ~/data/preprocessed_datasets/lee2019-ssvep_128_0.5-40/
+        length: 4.2 # seconds
+      scoring: accuracy
+      subjects: [ 48,49,50,51,52,53,54 ]
+n_folds: 5

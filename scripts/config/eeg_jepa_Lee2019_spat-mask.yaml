@@ -1,0 +1,93 @@
+# New config file using braindecode_datamodule.py and preprocess_moabb-dataset.py
+trainer:
+  max_steps: 500000 # ~500 epochs on Lee, with stride=16.9s, ~7h for length=16
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 1
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val_loss
+        mode: min
+        save_top_k: 1
+        save_last: true
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val_loss
+        patience: 10 # incremented each time val is checked
+        mode: min
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+  #    - class_path: sjepa.eeg_jepa.WandbWatchCallback
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      project: self-supervised-masked
+      log_model: all # log best https://docs.wandb.ai/guides/integrations/lightning#model-checkpointing
+    dict_kwargs:
+      entity: self-supervised-spd  # team name
+
+model:
+  feature_encoder_kwargs:
+    conv_layers_spec: [ [ 8, 32, 8 ],  [ 16,2,2 ], [ 32,2,2 ], [ 64,2,2 ], [ 64,2,2 ] ] # downsampling: 128Hz -> 1Hz, receptive field 1.1875s, stride 1s
+  #    conv_layers_spec: [ [ 64,32,8 ], [ 64,2,2 ],[ 64,2,2 ], [ 64,2,2 ],[ 64,2,2 ] ] # downsampling: 128Hz -> 1Hz, receptive field 1.1875s, stride 1s
+  pos_encoder_kwargs:
+    spat_dim: 30
+    time_dim: 34
+    # mne.channels.get_standard_montage('standard_1020')
+    ch_names: [ Fp1,Fpz,Fp2,AF9,AF7,AF5,AF3,AF1,AFz,AF2,AF4,AF6,AF8,AF10,F9,F7,F5,F3,F1,Fz,F2,F4,F6,F8,F10,FT9,FT7,FC5,FC3,FC1,FCz,FC2,FC4,FC6,FT8,FT10,T9,T7,C5,C3,C1,Cz,C2,C4,C6,T8,T10,TP9,TP7,CP5,CP3,CP1,CPz,CP2,CP4,CP6,TP8,TP10,P9,P7,P5,P3,P1,Pz,P2,P4,P6,P8,P10,PO9,PO7,PO5,PO3,PO1,POz,PO2,PO4,PO6,PO8,PO10,O1,Oz,O2,O9,Iz,O10,T3,T5,T4,T6,M1,M2,A1,A2 ]
+    # 10 coordinates with difference less than 1e-4
+    ch_locs: [ [ -0.2970,0.8467,-0.0705 ],[ 0.0011,0.8903,-0.0173 ],[ 0.3014,0.8565,-0.0714 ],[ -0.4941,0.6466,-0.4811 ],[ -0.5533,0.6918,-0.1068 ],[ -0.4584,0.7351,0.0603 ],[ -0.3400,0.7752,0.2142 ],[ -0.1864,0.8062,0.3304 ],[ 0.0023,0.8149,0.3573 ],[ 0.2000,0.8102,0.3306 ],[ 0.3603,0.7842,0.2215 ],[ 0.4700,0.7447,0.0609 ],[ 0.5624,0.7028,-0.1085 ],[ 0.5088,0.6444,-0.4843 ],[ -0.7073,0.4202,-0.5040 ],[ -0.7089,0.4285,-0.1152 ],[ -0.6504,0.4846,0.1707 ],[ -0.5069,0.5358,0.4257 ],[ -0.2774,0.5744,0.6088 ],[ 0.0031,0.5903,0.6705 ],[ 0.2978,0.5812,0.6007 ],[ 0.5230,0.5479,0.4118 ],[ 0.6852,0.5027,0.1651 ],[ 0.7369,0.4482,-0.1211 ],[ 0.7276,0.4244,-0.5090 ],[ -0.8483,0.1470,-0.5088 ],[ -0.8150,0.1425,-0.1123 ],[ -0.7790,0.1881,0.2468 ],[ -0.6072,0.2292,0.5604 ],[ -0.3437,0.2624,0.8070 ],[ 0.0038,0.2763,0.8946 ],[ 0.3509,0.2667,0.7951 ],[ 0.6285,0.2393,0.5613 ],[ 0.8024,0.2011,0.2466 ],[ 0.8254,0.1555,-0.1143 ],[ 0.8486,0.1449,-0.5099 ],[ -0.8666,-0.1597,-0.4871 ],[ -0.8491,-0.1616,-0.0943 ],[ -0.8100,-0.1388,0.2942 ],[ -0.6594,-0.1174,0.6493 ],[ -0.3648,-0.1007,0.9055 ],[ 0.0040,-0.0925,1.0114 ],[ 0.3801,-0.0971,0.8920 ],[ 0.6772,-0.1100,0.6415 ],[ 0.8420,-0.1289,0.2947 ],[ 0.8584,-0.1515,-0.0957 ],[ 0.8632,-0.1651,-0.4870 ],[ -0.8638,-0.4693,-0.4611 ],[ -0.8559,-0.4643,-0.0712 ],[ -0.8030,-0.4697,0.3122 ],[ -0.6412,-0.4743,0.6621 ],[ -0.3583,-0.4771,0.9213 ],[ 0.0039,-0.4774,1.0032 ],[ 0.3873,-0.4749,0.9150 ],[ 0.6721,-0.4705,0.6616 ],[ 0.8406,-0.4651,0.3148 ],[ 0.8631,-0.4595,-0.0719 ],[ 0.8693,-0.4745,-0.4628 ],[ -0.7366,-0.7442,-0.4136 ],[ -0.7308,-0.7411,-0.0251 ],[ -0.6787,-0.7697,0.2864 ],[ -0.5348,-0.7949,0.5644 ],[ -0.2888,-0.8124,0.7611 ],[ 0.0033,-0.8184,0.8335 ],[ 0.3220,-0.8120,0.7740 ],[ 0.5616,-0.7926,0.5707 ],[ 0.6849,-0.7658,0.2834 ],[ 0.7371,-0.7372,-0.0256 ],[ 0.7455,-0.7505,-0.4159 ],[ -0.5540,-0.9892,-0.3578 ],[ -0.5533,-0.9840,0.0282 ],[ -0.4886,-1.0023,0.2179 ],[ -0.3684,-1.0175,0.3750 ],[ -0.1914,-1.0268,0.4695 ],[ 0.0022,-1.0309,0.5106 ],[ 0.2005,-1.0270,0.4681 ],[ 0.3711,-1.0175,0.3672 ],[ 0.5026,-1.0033,0.2192 ],[ 0.5616,-0.9850,0.0275 ],[ 0.5548,-0.9897,-0.3586 ],[ -0.2968,-1.1345,0.0892 ],[ 0.0011,-1.1592,0.1479 ],[ 0.3011,-1.1316,0.0888 ],[ -0.3008,-1.1559,-0.2948 ],[ 0.0000,-1.1962,-0.2328 ],[ 0.3001,-1.1528,-0.2952 ],[ -0.8491,-0.1616,-0.0943 ],[ -0.7308,-0.7411,-0.0251 ],[ 0.8584,-0.1515,-0.0957 ],[ 0.7371,-0.7372,-0.0256 ],[ -0.8684,-0.4539,-0.6859 ],[ 0.8656,-0.4541,-0.6864 ],[ -0.8684,-0.2521,-0.6859 ],[ 0.8656,-0.2523,-0.6864 ] ]
+    sfreq_features: 1.0
+  mask_maker_kwargs:
+    n_contexts_per_input: 8
+    n_targets_per_context: 2
+    chs_n_unmasked: 8 # left out by random masking
+    chs_n_masked: 8
+    chs_radius_blocks: .8
+    chs_n_blocks_masked: 1
+    time: false # disable temporal   masking
+  transformer_kwargs:
+    d_model: 64
+    num_encoder_layers: 8 # like MAEEG
+    num_decoder_layers: 4
+    nhead: 8
+  average_top_k_layers: 4
+
+data:
+  sfreq: 128
+  length: 1.2 # seconds
+  stride: 16.9 # seconds
+  factor: 1000000 # 1e6
+  batch_size: 32
+  montage_kind: standard_1005
+  montage_head_size: 1 # normalize head size to 1 to allow for easier interpretation of chs_radius_blocks
+  dtype: float32
+  num_workers: 8
+  n_jobs: -1
+  ## TRAIN
+  train_config:
+    - path: ~/data/preprocessed_datasets/lee2019-erp_128_0.5-40/
+      constraints:
+        subject: [ 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40 ]
+        # subject: [ 1 ]
+    - path: ~/data/preprocessed_datasets/lee2019-mi_128_0.5-40/
+      constraints:
+        subject: [ 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40 ]
+        # subject: [ 1 ]
+    - path: ~/data/preprocessed_datasets/lee2019-ssvep_128_0.5-40/
+      constraints:
+        subject: [ 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40 ]
+        # subject: [ 1 ]
+  ## VAL
+  val_config:
+    - path: ~/data/preprocessed_datasets/lee2019-erp_128_0.5-40/
+      constraints:
+        subject: [ 41,42,43,44,45,46,47 ] #,48,49,50,51,52,53,54 ]
+        # subject: [ 2 ]
+    - path: ~/data/preprocessed_datasets/lee2019-mi_128_0.5-40/
+      constraints:
+        subject: [ 41,42,43,44,45,46,47 ] # ,48,49,50,51,52,53,54 ]
+        # subject: [ 2 ]
+    - path: ~/data/preprocessed_datasets/lee2019-ssvep_128_0.5-40/
+      constraints:
+        subject: [ 41,42,43,44,45,46,47 ] #,48,49,50,51,52,53,54 ]
+        # subject: [ 2 ]

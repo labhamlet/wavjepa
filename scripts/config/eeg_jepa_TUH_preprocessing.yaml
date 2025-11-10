@@ -1,0 +1,39 @@
+path: '~/data/preprocessed_datasets/'
+sfreq: 128
+l_freq: 0.5
+h_freq: 40
+suffix: '_128_0.5-40'
+#n_jobs: -1
+datasets:
+  class_path: braindecode.datasets.TUH
+  init_args:
+    path: '/home/piegue/data/tuh_eeg'
+    recording_ids: null
+    target_name: null
+    preload: false
+    add_physician_reports: false
+    rename_channels: true
+    set_montage: true
+  #    n_jobs: -1
+mandatory_ch_names: # all present in 40,685 or 40,686 REF recordings and  12,818 EL recordings
+  #  - A1 # Present in 34,633 REF and 12,802 EL recordings
+  #  - A2 # Present in 34,633 REF and 12,802 EL recordings
+  - Fp1
+  - Fp2
+  - F3
+  - F4
+  - C3
+  - C4
+  - P3
+  - P4
+  - O1
+  - O2
+  - F7
+  - F8
+  - T3
+  - T4
+  - T5
+  - T6
+  - Fz
+  - Cz
+  - Pz

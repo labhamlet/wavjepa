@@ -1,0 +1,21 @@
+csv_path: "export/results_eeg_jepa_Lee2019"
+project: "self-supervised-masked"
+entity: "self-supervised-spd"
+filters:
+  "$and":
+    - created_at:
+        "$gt": "2024-02-20T20:15"
+    #        "$lt": "2024-02-20T20:25"
+    - state:
+        "$nin":
+          - failed
+          - crashed
+          - killed
+history_keys:
+  - train_loss
+  - val_loss
+explode_keys:
+  - mask_maker_kwargs
+  - pos_encoder_kwargs
+  - transformer_kwargs
+  - feature_encoder_kwargs

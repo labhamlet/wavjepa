@@ -1,0 +1,66 @@
+# New config file using braindecode_datamodule.py and preprocess_moabb-dataset.py
+trainer:
+  max_steps: 1
+  log_every_n_steps: 1
+  precision: bf16-mixed
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint # save at the end of training
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint  # also save at regular intervals for safety
+      init_args:
+        train_time_interval:
+          class_path: datetime.timedelta
+          init_args:
+            minutes: 10
+        enable_version_counter: false
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    # - class_path: sjepa.eeg_jepa.WandbWatchCallback
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      # name: name  # name of the run
+      project: signal-jepa-chinchilla # project within an entity
+      log_model: all # log best https://docs.wandb.ai/guides/integrations/lightning#model-checkpointing
+    dict_kwargs:
+      # group: group  # groups runs within a project
+      entity: self-supervised-spd  # team name
+
+model:
+  feature_encoder_kwargs:
+    conv_layers_spec: [ [ 8, 32, 8 ],  [ 16,2,2 ], [ 32,2,2 ], [ 64,2,2 ], [ 64,2,2 ] ] # downsampling: 128Hz -> 1Hz, receptive field 1.1875s, stride 1s
+  #    conv_layers_spec: [ [ 64,32,8 ], [ 64,2,2 ],[ 64,2,2 ], [ 64,2,2 ],[ 64,2,2 ] ] # downsampling: 128Hz -> 1Hz, receptive field 1.1875s, stride 1s
+  pos_encoder_kwargs:
+    spat_dim: 30
+    time_dim: 34
+    ch_names: [ Fp1,Fp2,F3,F4,C3,C4,P3,P4,O1,O2,F7,F8,T3,T4,T5,T6,Fz,Cz,Pz,A1,A2 ]  # Channels always present in TUH recordings
+    ch_locs: [ [ -0.0294,0.0839,-0.0070 ],[ 0.0299,0.0849,-0.0071 ],[ -0.0502,0.0531,0.0422 ],[ 0.0518,0.0543,0.0408 ],[ -0.0654,-0.0116,0.0644 ],[ 0.0671,-0.0109,0.0636 ],[ -0.0530,-0.0788,0.0559 ],[ 0.0557,-0.0786,0.0566 ],[ -0.0294,-0.1124,0.0088 ],[ 0.0298,-0.1122,0.0088 ],[ -0.0703,0.0425,-0.0114 ],[ 0.0730,0.0444,-0.0120 ],[ -0.0842,-0.0160,-0.0093 ],[ 0.0851,-0.0150,-0.0095 ],[ -0.0724,-0.0735,-0.0025 ],[ 0.0731,-0.0731,-0.0025 ],[ 0.0003,0.0585,0.0665 ],[ 0.0004,-0.0092,0.1002 ],[ 0.0003,-0.0811,0.0826 ],[ -0.0861,-0.0250,-0.0680 ],[ 0.0858,-0.0250,-0.0680 ] ]
+    sfreq_features: 1.0
+  mask_maker_kwargs:
+    n_contexts_per_input: 4
+    n_targets_per_context: 1
+    chs_n_unmasked: 8 # left out by random masking
+    chs_n_masked: 8
+    chs_radius_blocks: 1.0
+    chs_n_blocks_masked: 1
+    time: false # disable temporal masking
+  transformer_kwargs:
+    d_model: 64
+    num_encoder_layers: 8 # like MAEEG
+    num_decoder_layers: 4
+    nhead: 8
+  average_top_k_layers: 4
+
+data:
+  sfreq: 128
+  length: 16 # seconds
+  stride: 0.0078125 # 1/128 seconds
+  factor: 1000000 # 1e6
+  batch_size: 32
+  montage_kind: standard_1005
+  montage_head_size: 1 # normalize head size to 1 to allow for easier interpretation of chs_radius_blocks
+  dtype: float32
+  num_workers: 8
+  pin_memory: true
+  n_jobs: -1
+  ## TRAIN
+  train_config:
+    - path: ~/data/preprocessed_datasets/tuh_128_0.5-40/

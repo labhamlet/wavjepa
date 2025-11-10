@@ -1,0 +1,19 @@
+csv_path: "export/results_batch_size"
+project: "signal-jepa-chinchilla"
+entity: "self-supervised-spd"
+filters:
+  "$and":
+    - group: "test_batch_size"
+    - state:
+        "$nin":
+          - failed
+          - crashed
+          - killed
+history_keys:
+  - "trainer/global_step"
+  - "_runtime"
+explode_keys:
+  - mask_maker_kwargs
+  - pos_encoder_kwargs
+  - transformer_kwargs
+  - feature_encoder_kwargs

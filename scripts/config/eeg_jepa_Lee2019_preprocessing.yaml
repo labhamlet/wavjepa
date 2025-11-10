@@ -1,0 +1,18 @@
+sfreq: 128
+l_freq: 0.5
+h_freq: 40
+path: '~/data/preprocessed_datasets/'
+suffix: '_128_0.5-40'
+datasets:
+  - name: Lee2019_ERP
+    kwargs:
+      test_run: true
+  #        resting_state: true
+  - name: Lee2019_MI
+    kwargs:
+      test_run: true
+  #        resting_state: true
+  - name: Lee2019_SSVEP
+    kwargs:
+      test_run: true
+  #        resting_state: true
