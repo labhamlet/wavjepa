@@ -15,4 +15,4 @@ module load Anaconda3/2023.07-2
 source activate sjape
 
 
-python3 train.py data=audioset data.clean_data_ratio=1.0 extractor=ConvChannelFeatureExtractor masker.channel_based_masking=True trainer.batch_size=16
+python3 train.py data=audioset data.clean_data_ratio=1.0 extractor=ConvFeatureExtractor trainer.batch_size=32

@@ -12,7 +12,7 @@ from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
 from wavjepa.masking import RandomClusterMaskMaker, RandomMaskMaker, TimeInverseBlockMasker, MultiBlockMaskMaker
-from wavjepa.extractors import ConvFeatureExtractor, ConvChannelFeatureExtractor, Extractor, SpectrogramPatchExtractor
+from wavjepa.extractors import ConvFeatureExtractor, ConvChannelFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
 
@@ -22,9 +22,8 @@ ORIGINAL_SR = 32000
 NETWORKS = {"JEPA": JEPA}
 MASKERS = {"random-masker": RandomMaskMaker, 'random-cluster-masker': RandomClusterMaskMaker, 'time-inverse-masker' : TimeInverseBlockMasker, 'multi-block-masker': MultiBlockMaskMaker}
 EXTRACTORS = {"spatial-conv-extractor": ConvFeatureExtractor, 
-              "spatial-conv-extractor-removed-last": ConvFeatureExtractor,
-              "spatial-conv-channel-extractor": ConvChannelFeatureExtractor, 
-              'spectrogram': SpectrogramPatchExtractor}
+              "conv-extractor": ConvFeatureExtractor}
+
 ENCODERS = {"Transformer" : {"LayerCFG" : TransformerLayerCFG, "EncoderCFG": TransformerEncoderCFG}}
 
 torch.set_float32_matmul_precision("medium")
