@@ -381,7 +381,7 @@ class JEPA(pl.LightningModule):
             )
             final_audio[mask_44k] = self.resampler_44k(audio)
 
-        if noise is not None:
+        if noise[0] is not None:
             # This is the real length of the noise actually.
             placed_noise_batch = torch.zeros_like(final_audio)
             for i in range(batch_size):
@@ -424,6 +424,7 @@ class JEPA(pl.LightningModule):
             noise=placed_noise_batch,
             noise_rirs=noise_rirs,
             snr=snr,
+            sr = ORIGINAL_SR
         )
 
         generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)

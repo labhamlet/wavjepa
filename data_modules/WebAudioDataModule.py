@@ -1,6 +1,7 @@
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
-import webdataset as wds, RandomMix
+import webdataset as wds
+from webdataset import RandomMix
 import torch
 import multiprocessing as mp
 import queue
@@ -342,7 +343,7 @@ class WebAudioDataModule(pl.LightningDataModule):
             ctx_and_target_masks,
         )
 
-    def make_web_dataset(self, path: str, shuffle: int):
+    def make_web_dataset(self, shuffle: int):
         """Create a WebDataset pipeline for audio processing."""
         datasets = [] 
         for data_path in self.data_dirs:

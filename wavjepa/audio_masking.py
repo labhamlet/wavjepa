@@ -4,7 +4,7 @@ import random
 
 from random import randrange, randint
 import numpy as np
-from sjepa.masking_utils import mask_to_indices
+from wavjepa.masking_utils import mask_to_indices
 
 def gen_targetid_random(n_times: int, selected_tokens: Optional[torch.Tensor] = None, cluster_d: int = 15, cluster_u: int = 20):
     """

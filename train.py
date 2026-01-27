@@ -207,7 +207,7 @@ def create_data_module(cfg, nr_patches) -> pl.LightningDataModule:
     masker = factory.create_masker(cfg)
 
     return WebAudioDataModule(
-        data_dirs=cfg.data.data_dir,
+        data_dirs=cfg.data.data_dirs,
         mixing_weights=cfg.data.mixing_weights,
         noise_dir=cfg.data.noise_dir,
         rir_dir=cfg.data.rir_dir,

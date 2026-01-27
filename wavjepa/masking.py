@@ -1,10 +1,9 @@
-from typing import Tuple
 from torch import nn
-from einops import repeat, parse_shape, rearrange
+from einops import repeat, rearrange
 import torch
 from random import randrange
 
-from sjepa.audio_masking import (
+from wavjepa.audio_masking import (
     gen_targetid_cluster, gen_targetid_random, 
     gen_maskid_patch_tgt, gen_maskid_patch,
     compute_mask_indices)
