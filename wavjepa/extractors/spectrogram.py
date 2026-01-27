@@ -1,8 +1,7 @@
+import torchaudio 
 import torch
-import torchaudio
-from torch import nn
-
-from .audio_extractor import Extractor
+from torch import nn 
+from .audio_extractor import Extractor 
 
 
 def generate_patches(input, fstride, tstride, fshape, tshape):
@@ -56,7 +55,7 @@ class SpectrogramPatchExtractor(Extractor, nn.Module):
     Convolutional feature encoder for EEG data.
 
     Computes successive 1D convolutions (with activations) over the time
-    dimension of the audio signal. This encoder also uses different kernels for each time signal.
+    dimension of the audio signal. This encoder also uses different kernels for each time signal. 
     Therefore, in_channels argument is necessary!
 
     Inspiration from https://github.com/facebookresearch/fairseq/blob/main/fairseq/models/wav2vec/wav2vec2.py
@@ -74,28 +73,28 @@ class SpectrogramPatchExtractor(Extractor, nn.Module):
         mode: str
             Normalisation mode. Either``default`` or ``layer_norm``.
         conv_bias: bool
-        depthwise: bool
+        depthwise: bool 
             Perform depthwise convolutions rather than the full convolution.
     """
 
     def __init__(
         self,
-        n_mels: int = 128,
-        window_size: int = 1024,
-        n_fft: int = 1024,
+        n_mels : int = 128,
+        window_size : int = 1024,
+        n_fft : int = 1024,
         hop_length: int = 320,
-        sr: int = 32000,
-        embedding_dim: int = 768,
-        in_channels: int = 2,
-        fshape: int = 16,
-        tshape: int = 32,
-        fstride: int = 16,
+        sr : int = 32000,
+        embedding_dim : int = 768,
+        in_channels : int = 2,
+        fshape : int = 16,
+        tshape : int = 32,
+        fstride : int = 16,
         tstride: int = 32,
-        input_tdim: int = 200,
+        input_tdim : int = 200,
         trainable: bool = True,
         **kwargs,
     ):
-        super().__init__()  # type: ignore
+        super().__init__() # type: ignore
         self.fstride = fstride
         self.tstride = tstride
         self.fshape = fshape
@@ -103,15 +102,15 @@ class SpectrogramPatchExtractor(Extractor, nn.Module):
         self.in_channels = in_channels
         self.embedding_dim = embedding_dim
         self.audio_encoder = torchaudio.transforms.MelSpectrogram(
-            sample_rate=sr,
-            n_fft=n_fft,
-            win_length=window_size,
-            hop_length=hop_length,
-            f_min=50,
-            f_max=sr // 2,
-            n_mels=n_mels,
-            power=2.0,
-        ).float()
+                sample_rate=sr,
+                n_fft=n_fft,
+                win_length=window_size,
+                hop_length=hop_length,
+                f_min=50,
+                f_max=sr // 2,
+                n_mels=n_mels,
+                power=2.0,
+            ).float() 
 
         self.patcher = torch.nn.Conv2d(
             self.in_channels,
@@ -122,13 +121,13 @@ class SpectrogramPatchExtractor(Extractor, nn.Module):
 
         self.input_tdim = input_tdim
         p_f_dim, p_t_dim = get_shape(
-            fstride=fstride,
-            tstride=tstride,
-            input_fdim=n_mels,
-            input_tdim=input_tdim,
-            fshape=fshape,
-            tshape=tshape,
-        )
+                fstride=fstride,
+                tstride=tstride,
+                input_fdim=n_mels,
+                input_tdim=input_tdim,
+                fshape=fshape,
+                tshape=tshape,
+            )
         self.grid_size = (p_f_dim, p_t_dim)
 
     def to_mel(self, x: torch.Tensor) -> torch.Tensor:
@@ -143,9 +142,9 @@ class SpectrogramPatchExtractor(Extractor, nn.Module):
                 ``emb_dim`` corresponds to the ``dim`` of the last element of
                 ``conv_layers_spec``.
         """
-
+        
         mel = self.audio_encoder(x)
-        spec = torch.log(mel + 1e-5)[:, :, :, : self.input_tdim]
+        spec = torch.log(mel + 1e-5)[:, :, :, :self.input_tdim]
         # B, C, F, T
         # Reshape back to separate batch and channel dimensions
         # Assuming encoder output shape is (batch_size * n_chans, out_dim, out_times)
@@ -153,9 +152,9 @@ class SpectrogramPatchExtractor(Extractor, nn.Module):
         dims_to_normalize = [1, 2, 3]
         mean = spec.mean(dim=dims_to_normalize, keepdim=True)
         var = spec.var(dim=dims_to_normalize, keepdim=True, unbiased=False)
-
+        
         # Apply normalization
-        eps = 1e-5
+        eps = 1e-5 
         spec = (spec - mean) / torch.sqrt(var + eps)
         return spec
 
@@ -165,9 +164,7 @@ class SpectrogramPatchExtractor(Extractor, nn.Module):
         """
 
         mel = self.to_mel(audio)
-        patches = generate_patches(
-            mel, self.fstride, self.tstride, self.fshape, self.tshape
-        )
+        patches = generate_patches(mel, self.fstride, self.tstride, self.fshape, self.tshape)
         return patches.flatten(2)
 
     def forward(self, audio):
@@ -180,6 +177,7 @@ class SpectrogramPatchExtractor(Extractor, nn.Module):
         """The radius property."""
         return self.fshape * self.tshape * self.in_channels
 
+        
     def total_patches(self, time: int) -> int:
         """Calculate the number of output time steps for a given input length."""
         x = torch.zeros((1, self.in_channels, time))

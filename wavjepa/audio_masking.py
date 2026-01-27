@@ -1,27 +1,21 @@
-import random
-from random import randint, randrange
-
-import numpy as np
+from typing import List, Tuple,Optional
 import torch
+import random
 
+from random import randrange, randint
+import numpy as np
 from sjepa.masking_utils import mask_to_indices
 
-
-def gen_targetid_random(
-    n_times: int,
-    selected_tokens: torch.Tensor | None = None,
-    cluster_d: int = 15,
-    cluster_u: int = 20,
-):
+def gen_targetid_random(n_times: int, selected_tokens: Optional[torch.Tensor] = None, cluster_d: int = 15, cluster_u: int = 20):
     """
     Generate random target indices for masking.
-
+    
     Args:
         n_times: The total number of time steps/patches
         selected_tokens: Optional boolean tensor indicating already selected positions (True = selected)
         cluster_d: Minimum cluster size (lower bound)
         cluster_u: Maximum cluster size (upper bound)
-
+    
     Returns:
         torch.Tensor: Indices of selected positions
     """
@@ -32,25 +26,25 @@ def gen_targetid_random(
         indices_list = available_indices.tolist()
     else:
         indices_list = list(range(n_times))
-
+    
     # Ensure we don't try to sample more than available
     mask_size = randint(cluster_d, cluster_u)
     mask_size = min(mask_size, len(indices_list))
-
+    
     if mask_size == 0:
         return torch.tensor([], dtype=torch.long)
-
+    
     mask_id = random.sample(indices_list, mask_size)
-
+    
     return torch.tensor(mask_id, dtype=torch.long)
 
 
-def gen_targetid_cluster(n_times: int, cluster_d: int = 15, cluster_u: int = 20):
+def gen_targetid_cluster(n_times : int, cluster_d : int = 15, cluster_u : int = 20):
     """
     :p_t_dim: The patch time dimension...
     :mask_patch: Number of patches to mask
     """
-    mask_id = []
+    mask_id  = []
 
     cur_clus = randint(cluster_d, cluster_u)
     start_id = randint(0, n_times - cur_clus)
@@ -58,16 +52,15 @@ def gen_targetid_cluster(n_times: int, cluster_d: int = 15, cluster_u: int = 20)
     for i in range(0, cur_clus):
         mask_cand = start_id + i
         if mask_cand < n_times:
-            cur_mask.append(mask_cand)
+          cur_mask.append(mask_cand)
 
     mask_id.extend(cur_mask)
     mask_id = list(set(mask_id))
     return torch.tensor(mask_id)
 
-
 def compute_mask_indices(
-    shape: tuple[int, int],
-    padding_mask: torch.Tensor | None,
+    shape: Tuple[int, int],
+    padding_mask: Optional[torch.Tensor],
     mask_prob: float,
     mask_length: int,
     mask_type: str = "static",
@@ -78,9 +71,9 @@ def compute_mask_indices(
     require_same_masks: bool = True,
     mask_dropout: float = 0.0,
     add_masks: bool = False,
-    seed: int | None = None,
-    epoch: int | None = None,
-    indices: torch.Tensor | None = None,
+    seed: Optional[int] = None,
+    epoch: Optional[int] = None,
+    indices: Optional[torch.Tensor] = None,
     idc_select_ver: int = 1,  # 2 to reproduce mask_tokens_dataset
     num_mask_ver: int = 2,  # 2 to reproduce mask_tokens_dataset
 ):
@@ -112,7 +105,8 @@ def compute_mask_indices(
     if num_mask_ver == 1:
         all_num_mask = int(
             # add a random number for probabilistic rounding
-            mask_prob * all_sz / float(mask_length) + np.random.rand()
+            mask_prob * all_sz / float(mask_length)
+            + np.random.rand()
         )
         all_num_mask = max(min_masks, all_num_mask)
 
@@ -135,7 +129,8 @@ def compute_mask_indices(
             if padding_mask is not None:
                 num_mask = int(
                     # add a random number for probabilistic rounding
-                    mask_prob * sz / float(mask_length) + np.random.rand()
+                    mask_prob * sz / float(mask_length)
+                    + np.random.rand()
                 )
                 num_mask = max(min_masks, num_mask)
             else:
@@ -143,7 +138,8 @@ def compute_mask_indices(
         elif num_mask_ver == 2:
             num_mask = int(
                 # add a random number for probabilistic rounding
-                mask_prob * sz / float(mask_length) + rng.random()
+                mask_prob * sz / float(mask_length)
+                + rng.random()
             )
             num_mask = max(min_masks, num_mask)
         else:
@@ -164,7 +160,7 @@ def compute_mask_indices(
 
         if sum(lengths) == 0:
             if mask_type == "static":
-                raise ValueError("this should never happens")
+                raise ValueError(f"this should never happens")
             else:
                 lengths = [min(mask_length, sz - 1)]
 
@@ -219,11 +215,11 @@ def compute_mask_indices(
         mask_idc = np.unique(mask_idc[mask_idc < sz])
         if len(mask_idc) >= sz:
             raise ValueError(
-                
+                (
                     f"the entire sequence is masked. "
                     f"sz={sz}; mask_idc[mask_idc]; "
                     f"index={indices[i] if indices is not None else None}"
-                
+                )
             )
         mask_idcs.append(mask_idc)
 
@@ -251,203 +247,202 @@ def compute_mask_indices(
             to_drop = rng.choice(masked, num_holes, replace=False)
             mask[i, to_drop] = False
 
-    return torch.tensor(mask, dtype=torch.bool).squeeze()
+    return torch.tensor(mask, dtype = torch.bool).squeeze()
 
 
-def generate_masks_block_masking(
-    B: int,
-    sequence_len: int,
-    mask_prob: float,
+def generate_masks_block_masking(B : int, 
+    sequence_len : int, 
+    mask_prob : float,
     mask_length: int,
-) -> tuple[torch.BoolTensor, torch.BoolTensor]:
-    """
+) -> Tuple[torch.BoolTensor, torch.BoolTensor]:
+    '''
     Generate context and target masks with random clustering factor.
-    Returns the mask tensor and target mask boolean tensor where masked indices are True.
+    Returns the mask tensor and target mask boolean tensor where masked indices are True. 
     Target and context vector do not overlap. Context returns True when it is selected.
     Arguments
     ---------
         sequence_len : int
             The length of the sequence that we are going to mask. Corresponds to L in the paper
 
-        nr_targets_per_ctx : int
+        nr_targets_per_ctx : int 
             Number of targets to generate per one context vector
 
-        cluster_ctx : bool
-            Clustering factor for the context masks. Randomly select between [3,5].
+        cluster_ctx : bool 
+            Clustering factor for the context masks. Randomly select between [3,5]. 
             This leads to masking blocks of the context.
 
-        cluster_tgt : bool
-            Clustering factor for the target masks. Randomly select between [3,5].
+        cluster_tgt : bool 
+            Clustering factor for the target masks. Randomly select between [3,5]. 
             This leads to masking blocks of the target.
 
-        mask_patch : int
+        mask_patch : int 
             Number of patches to mask.
 
-        nr_target_patches : int
+        nr_target_patches : int 
             Number of target patches to produce
-
-    Returns
+    
+    Returns 
     --------
         [torch.Tensor, torch.Tensor] boolean tensor indicating the masked indices.
+        
+    '''
 
-    """
-
-    mask = torch.zeros((B, sequence_len), requires_grad=False, dtype=torch.bool)
+    mask = torch.zeros((B, sequence_len), requires_grad=False, dtype = torch.bool)
     # Create attention matrix - start with all False
     att_matrix = torch.zeros([B, sequence_len, sequence_len], dtype=torch.bool)
     for i in range(B):
-        mask[i] = compute_mask_indices(
-            (1, sequence_len),
-            padding_mask=None,
-            mask_prob=mask_prob,
-            mask_length=mask_length,
-        )
+        mask[i] = compute_mask_indices((1, sequence_len),
+                                       padding_mask = None,
+                                       mask_prob = mask_prob,
+                                       mask_length = mask_length)
         idx = mask_to_indices(mask[i])
         # Set entire rows for masked positions to True
         # True in attention_mask means that attention is not applied.
         att_matrix[i, idx, :] = True
-        # Set entire columns for masked positions to True
+        # Set entire columns for masked positions to True  
         att_matrix[i, :, idx] = True
-
+    
     return mask, att_matrix
 
 
-def generate_mask_random(
-    B: int,
-    sequence_len: int,
-    mask_patch: int,
-    cluster: bool,
-) -> tuple[torch.BoolTensor]:
-    """
+def generate_mask_random(B : int, 
+    sequence_len : int, 
+    mask_patch : int,
+    cluster : bool, 
+) -> Tuple[torch.BoolTensor]:
+    '''
     Generate context and target masks with random clustering factor.
-    Returns the mask tensor and target mask boolean tensor where masked indices are True.
+    Returns the mask tensor and target mask boolean tensor where masked indices are True. 
     Target and context vector do not overlap. Context returns True when it is selected.
     Arguments
     ---------
         sequence_len : int
             The length of the sequence that we are going to mask. Corresponds to L in the paper
 
-        nr_targets_per_ctx : int
+        nr_targets_per_ctx : int 
             Number of targets to generate per one context vector
 
-        cluster : bool
-            Clustering factor for the context masks. Randomly select between [3,5].
+        cluster : bool 
+            Clustering factor for the context masks. Randomly select between [3,5]. 
             This leads to masking blocks of the context.
 
-        mask_patch : int
+        mask_patch : int 
             Number of patches to mask.
 
-    Returns
+    Returns 
     --------
         [torch.Tensor] boolean tensor indicating the masked indices.
+        
+    '''
 
-    """
-
-    mask = torch.zeros((B, sequence_len), requires_grad=False, dtype=torch.bool)
+    mask = torch.zeros((B, sequence_len), requires_grad=False, dtype = torch.bool)
     att_matrix = torch.zeros([B, sequence_len, sequence_len], dtype=torch.bool)
 
     for i in range(B):
         if cluster:
-            mask_id = gen_maskid_patch(sequence_len=sequence_len, mask_patch=mask_patch)
-        else:
-            mask_id = gen_maskid_frame(sequence_len=sequence_len, mask_size=mask_patch)
+            mask_id = gen_maskid_patch(
+                    sequence_len=sequence_len, mask_patch=mask_patch
+                )
+        else:            
+            mask_id = gen_maskid_frame(
+                    sequence_len=sequence_len, mask_size=mask_patch
+                )
         mask[i, mask_id] = 1
         idx = mask_to_indices(mask[i])
         att_matrix[i, idx, :] = True
-        # Set entire columns for masked positions to True
+        # Set entire columns for masked positions to True  
         att_matrix[i, :, idx] = True
-
+        
     return mask, att_matrix
 
 
-def generate_masks(
-    B: int,
-    sequence_len: int,
-    nr_targets_per_ctx: int,
-    mask_patch: int,
-    cluster_ctx: bool,
-    cluster_tgt: bool,
-    nr_target_patches: torch.Tensor,
-) -> tuple[torch.BoolTensor, torch.BoolTensor]:
-    """
+
+def generate_masks(B : int, 
+    sequence_len : int, 
+    nr_targets_per_ctx : int , 
+    mask_patch : int,
+    cluster_ctx : bool, 
+    cluster_tgt : bool, 
+    nr_target_patches : torch.Tensor,
+) -> Tuple[torch.BoolTensor, torch.BoolTensor]:
+    '''
     Generate context and target masks with random clustering factor.
-    Returns the mask tensor and target mask boolean tensor where masked indices are True.
+    Returns the mask tensor and target mask boolean tensor where masked indices are True. 
     Target and context vector do not overlap. Context returns True when it is selected.
     Arguments
     ---------
         sequence_len : int
             The length of the sequence that we are going to mask. Corresponds to L in the paper
 
-        nr_targets_per_ctx : int
+        nr_targets_per_ctx : int 
             Number of targets to generate per one context vector
 
-        cluster_ctx : bool
-            Clustering factor for the context masks. Randomly select between [3,5].
+        cluster_ctx : bool 
+            Clustering factor for the context masks. Randomly select between [3,5]. 
             This leads to masking blocks of the context.
 
-        cluster_tgt : bool
-            Clustering factor for the target masks. Randomly select between [3,5].
+        cluster_tgt : bool 
+            Clustering factor for the target masks. Randomly select between [3,5]. 
             This leads to masking blocks of the target.
 
-        mask_patch : int
+        mask_patch : int 
             Number of patches to mask.
 
-        nr_target_patches : int
+        nr_target_patches : int 
             Number of target patches to produce
-
-    Returns
+    
+    Returns 
     --------
         [torch.Tensor, torch.Tensor] boolean tensor indicating the masked indices.
+        
+    '''
 
-    """
-
-    assert nr_target_patches.shape[0] == B, (
-        "Number of target patches should have the same length as B"
-    )
-    assert nr_target_patches.shape[1] == nr_targets_per_ctx, (
-        "Inner list of number of target patches should have the same length as nr_targets_per_ctx"
-    )
-    mask = torch.zeros((B, sequence_len), requires_grad=False, dtype=torch.bool)
-    mask_tgts = torch.zeros(
-        (B, nr_targets_per_ctx, sequence_len), dtype=torch.bool, requires_grad=False
-    )
+    assert nr_target_patches.shape[0] == B, "Number of target patches should have the same length as B"
+    assert nr_target_patches.shape[1] == nr_targets_per_ctx, "Inner list of number of target patches should have the same length as nr_targets_per_ctx"
+    mask = torch.zeros((B, sequence_len), requires_grad=False, dtype = torch.bool)
+    mask_tgts = torch.zeros((B, nr_targets_per_ctx, sequence_len), dtype=torch.bool, requires_grad=False)
     for i in range(B):
         if cluster_ctx:
-            mask_id = gen_maskid_patch(sequence_len=sequence_len, mask_patch=mask_patch)
-        else:
-            mask_id = gen_maskid_frame(sequence_len=sequence_len, mask_size=mask_patch)
+            mask_id = gen_maskid_patch(
+                    sequence_len=sequence_len, mask_patch=mask_patch
+                )
+        else:            
+            mask_id = gen_maskid_frame(
+                    sequence_len=sequence_len, mask_size=mask_patch
+                )
         mask[i, mask_id] = 1
         for j in range(nr_targets_per_ctx):
-            _nr_target_patches = int(nr_target_patches[i, j].item())
+            _nr_target_patches = int(nr_target_patches[i,j].item())
             if cluster_tgt:
                 mask_tgts_id = gen_maskid_patch_tgt(
-                    masked_patches=mask[i], mask_patch=_nr_target_patches
+                masked_patches = mask[i],
+                mask_patch = _nr_target_patches
                 )
             else:
                 mask_tgts_id = gen_maskid_frame_tgt(
-                    masked_patches=mask[i], mask_size=_nr_target_patches
+                masked_patches = mask[i],
+                mask_size= _nr_target_patches
                 )
             mask_tgts[i, j, mask_tgts_id] = 1
     return mask, mask_tgts
 
 
-def gen_maskid_patch_tgt(
-    masked_patches: torch.Tensor, mask_patch: int = 100, cluster: int = 3
-):
+
+def gen_maskid_patch_tgt(masked_patches : torch.Tensor, mask_patch : int =100, cluster : int =3):
     """
     :p_t_dim: The patch time dimension...
     :mask_patch: Number of patches to mask
     """
-    mask_id: list[int] = []
-    indices: torch.Tensor = masked_patches.nonzero().flatten()
-    indices_list: list[int] = indices.tolist()  # type: ignore
+    mask_id : List[int] = []
+    indices : torch.Tensor = masked_patches.nonzero().flatten()
+    indices_list : List[int] = indices.tolist() # type: ignore
     indices_set = set(indices_list)
 
     # randomize clutering factor in [3,6)
     cur_clus = randrange(cluster) + 3
     while len(list(set(mask_id))) < mask_patch:
         start_id = random.sample(indices_list, 1)[0]
-        cur_mask: list[int] = []
+        cur_mask : List[int] = []
         for i in range(-cur_clus, cur_clus):
             mask_cand = start_id + i
             if mask_cand in indices_set:
@@ -458,32 +453,29 @@ def gen_maskid_patch_tgt(
 
 
 # using cluster for frame masking hurts the performance, so just use the naive random sampling
-def gen_maskid_frame_tgt(masked_patches: torch.Tensor, mask_size: int = 100):
+def gen_maskid_frame_tgt(masked_patches : torch.Tensor, mask_size : int = 100):
     # We sample from the masked indices.
-    indices: list[int] = masked_patches.nonzero().flatten().tolist()  # type: ignore
+    indices : List[int] = masked_patches.nonzero().flatten().tolist() # type: ignore
     try:
-        mask_id: list[int] = random.sample(indices, k=mask_size)
+        mask_id : List[int] = random.sample(indices,  k = mask_size)
     except ValueError as e:
         print(e)
-        print(len(indices), mask_size, flush=True)
+        print(len(indices), mask_size, flush = True)
         raise e
     return torch.tensor(mask_id)
 
-
-def gen_maskid_patch(
-    sequence_len: int = 512, mask_patch: int = 100, cluster: int = 3
-) -> torch.Tensor:
+def gen_maskid_patch(sequence_len : int =512, mask_patch : int =100, cluster : int = 3) -> torch.Tensor:
     """
     :p_t_dim: The patch time dimension...
     :mask_patch: Number of patches to mask
     """
-    mask_id: list[int] = []
+    mask_id : List[int] = []
 
     # randomize clutering factor in [3,6)
     cur_clus = randrange(cluster) + 3
     while len(list(set(mask_id))) < mask_patch:
         start_id = randrange(sequence_len)
-        cur_mask: list[int] = []
+        cur_mask : List[int] = []
         for i in range(-cur_clus, cur_clus):
             mask_cand = start_id + i
             if mask_cand >= 0 and mask_cand < sequence_len:
@@ -494,6 +486,7 @@ def gen_maskid_patch(
 
 
 # using cluster for frame masking hurts the performance, so just use the naive random sampling
-def gen_maskid_frame(sequence_len: int = 512, mask_size: int = 100) -> torch.Tensor:
+def gen_maskid_frame(sequence_len : int =512, mask_size : int =100) -> torch.Tensor:
     mask_id = random.sample(range(0, sequence_len), mask_size)
     return torch.tensor(mask_id)
+

@@ -1,7 +1,7 @@
 from math import ceil
 
-import einops
 import torch
+import einops
 
 
 def time_inverse_block_masking(
@@ -358,7 +358,7 @@ def random_masking_2stages(
     return output
 
 
-def mask_to_indices(mask: torch.BoolTensor, check: bool = False) -> torch.Tensor:
+def mask_to_indices(mask: torch.BoolTensor, check : bool =False) -> torch.Tensor:
     """
     Returns the indices of the true elements.
 
@@ -407,7 +407,7 @@ def complement_index(index, n):
     assert index.max() < n, "sparse index"
     n_bdims = index.ndim - 1
     all_idx = einops.rearrange(
-        torch.arange(n, device=index.device), f"n -> {'1 ' * n_bdims} n 1"
+        torch.arange(n, device=index.device), f"n -> {'1 '*n_bdims} n 1"
     )
     index = einops.rearrange(index, "... n0 -> ... 1 n0")
     out = (all_idx != index).all(dim=-1)

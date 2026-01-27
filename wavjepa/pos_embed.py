@@ -96,64 +96,60 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 def get_1d_sincos_pos_embed(embed_dim, length):
     """
     Create 1D sinusoidal positional embeddings.
-
+    
     Args:
         embed_dim: embedding dimension
         length: sequence length
-
+    
     Returns:
         pos_embed: [length, embed_dim]
     """
     assert embed_dim % 2 == 0
-
+    
     omega = np.arange(embed_dim // 2, dtype=np.float64)
     omega /= embed_dim / 2.0
     omega = 1.0 / 10000**omega  # (D/2,)
-
+    
     pos = np.arange(length, dtype=np.float64)  # (length,)
     out = np.einsum("m,d->md", pos, omega)  # (length, D/2)
-
+    
     emb_sin = np.sin(out)  # (length, D/2)
     emb_cos = np.cos(out)  # (length, D/2)
-
+    
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (length, D)
     return emb
-
 
 def get_binaural_pos_embed(embed_dim, time_steps=100):
     """
     Create positional embeddings for binaural audio.
     Same time encoding, different channel encoding.
-
+    
     Args:
         embed_dim: embedding dimension
         time_steps: number of time steps per channel
-
+    
     Returns:
         pos_embed: [2*time_steps, embed_dim] - for concatenated L+R channels
     """
     assert embed_dim % 2 == 0
-
+    
     # Time dimension encoding (same for both channels)
     time_embed = get_1d_sincos_pos_embed(embed_dim // 2, time_steps)
-
+    
     # Channel dimension encoding (different for L and R)
     channel_embed_left = np.zeros((time_steps, embed_dim // 2))  # Left channel = 0
-    channel_embed_right = get_1d_sincos_pos_embed(
-        embed_dim // 2, 1
-    )  # Right channel = different
+    channel_embed_right = get_1d_sincos_pos_embed(embed_dim // 2, 1)  # Right channel = different
     channel_embed_right = np.tile(channel_embed_right, (time_steps, 1))
-
+    
     # Combine time and channel embeddings
     left_pos_embed = np.concatenate([time_embed, channel_embed_left], axis=1)
     right_pos_embed = np.concatenate([time_embed, channel_embed_right], axis=1)
-
+    
     # Concatenate left and right channel embeddings
     binaural_pos_embed = np.concatenate([left_pos_embed, right_pos_embed], axis=0)
-
+    
     return binaural_pos_embed
-
-
+    
 # --------------------------------------------------------
 # Interpolate position embeddings for high-resolution
 # References:

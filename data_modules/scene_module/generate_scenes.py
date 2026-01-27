@@ -3,6 +3,7 @@
 # Convolves the noise audio with the noise RIRs
 
 from pathlib import Path
+from typing import Optional, List
 
 import numpy as np
 import torch
@@ -16,11 +17,11 @@ def apply_fadein(audio: torch.Tensor, sr: int, duration: float = 0.20) -> torch.
     ----------
     audio : torch.Tensor
         The audio that we want to fade-in
-    sr : int
+    sr : int 
         Sampling rate of the audio
     duration : float
-        Duration of the fade-in
-
+        Duration of the fade-in 
+    
     Returns
     --------
     torch.Tensor with faded-in audio
@@ -43,7 +44,7 @@ def apply_fadeout(audio: torch.Tensor, sr: int, duration: float = 0.20) -> torch
     ----------
     audio : torch.Tensor
         The audio that we want to fade-out
-    sr : int
+    sr : int 
         Sampling rate of the audio
     duration : float
         Duration of the fade-out
@@ -64,14 +65,14 @@ def apply_fadeout(audio: torch.Tensor, sr: int, duration: float = 0.20) -> torch
     return audio
 
 
-def load_rir(path: str) -> torch.Tensor | None:
-    """Loads the RIR from specified path.
+def load_rir(path: str) -> Optional[torch.Tensor]:
+    """Loads the RIR from specified path. 
 
     Arguments
     ----------
     path : str
-        The path that we want to load RIR from
-
+        The path that we want to load RIR from 
+    
     Raises
     ---------
     AssertionError
@@ -90,20 +91,20 @@ def load_rir(path: str) -> torch.Tensor | None:
 
 
 def convolve_with_rir(waveform: torch.Tensor, rir: torch.Tensor) -> torch.Tensor:
-    """Convolve the waveform with the specified RIR
+    """Convolve the waveform with the specified RIR 
 
     Arguments
     ---------
-    waveform : torch.Tensor
-        The waveform that represent the audio
-    rir : torch.Tensor
-        The rir that we want to apply
-
+    waveform : torch.Tensor 
+        The waveform that represent the audio 
+    rir : torch.Tensor 
+        The rir that we want to apply 
+    
     Raises
     -------
     AssertionError
         If the audio is not mono, and has an additional dummy channel raise an error
-
+    
     Returns
     --------
     Convolved audio with the RIR. The returned audio has the same shape as the input waveform.
@@ -132,10 +133,10 @@ def add_noise(
     waveform: torch.Tensor,
     noise: torch.Tensor,
     snr: torch.Tensor,
-    lengths: torch.Tensor | None = None,
+    lengths: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     r"""Taken from torchaudio source code.
-
+    
     Scales and adds noise to waveform per signal-to-noise ratio.
 
     Specifically, for each pair of waveform vector :math:`x \in \mathbb{R}^L` and noise vector
@@ -179,7 +180,7 @@ def add_noise(
 
     L = waveform.size(-1)
 
-    if noise.size(-1) != L:
+    if L != noise.size(-1):
         raise ValueError(
             f"Length dimensions of waveform and noise don't match (got {L} and {noise.size(-1)})."
         )
@@ -212,11 +213,11 @@ def fade_noise(noise_source: torch.Tensor, audio_source: torch.Tensor, sr: int):
     """Facade function to determine what kind of fade-in and fade-out we should apply to the noise
     Arguments
     ---------
-    noise_source: torch.Tensor
-        The noise waveform
-    audio_source: torch.Tensor
-        The audio waveform
-    sr : int
+    noise_source: torch.Tensor 
+        The noise waveform 
+    audio_source: torch.Tensor 
+        The audio waveform 
+    sr : int 
         The sampling rate for both audio_source and noise_source
     """
     if noise_source.shape[-1] > audio_source.shape[-1]:
@@ -233,14 +234,14 @@ def fade_noise(noise_source: torch.Tensor, audio_source: torch.Tensor, sr: int):
 
 def aggregate_noise(noise_rirs, noise_source):
     """Aggregate the multiple noise sources into one waveform.
-    this creates a naturalistic scene where multiple noise sources are in.
+    this creates a naturalistic scene where multiple noise sources are in. 
     Arguments
     ---------
     noise_rirs : List[torch.Tensor]
-        Multiple noise RIRs retrieved from the scene specification
-    noise_source : torch.Tensor
+        Multiple noise RIRs retrieved from the scene specification 
+    noise_source : torch.Tensor 
         The noise sample from WHAMR! dataset
-
+    
     Returns
     --------
     torch.Tensor with multiple noise sources aggregated.
@@ -260,13 +261,11 @@ def aggregate_noise(noise_rirs, noise_source):
     return agg_noise
 
 
-def process_audio(
-    source_rir: torch.Tensor,
-    noise_rirs: list[torch.Tensor],
-    audio_source: torch.Tensor,
-    noise_source: torch.Tensor,
-    sr: int,
-):
+def process_audio(source_rir : torch.Tensor, 
+    noise_rirs: List[torch.Tensor], 
+    audio_source: torch.Tensor, 
+    noise_source: torch.Tensor, 
+    sr : int):
     """Facade function for processing the audio and noise sources with their corresponding RIRs
     Arguments
     ---------
@@ -274,15 +273,15 @@ def process_audio(
         The source RIR that audio_source will be convolved with
     noise_rirs : List[torch.Tensor]
         The noise RIRs that noise_source will be convolved with
-    audio_source : torch.Tensor
-        The audio source from AudioSet
-    noise_source : torch.Tensor
+    audio_source : torch.Tensor 
+        The audio source from AudioSet 
+    noise_source : torch.Tensor 
         The noise source from WHAMR!
-
+    
     Raises
     -------
     AssertionError if there are no source_rirs or no noise_rirs.
-
+    
     Returns
     --------
     The generated scene as torch.Tensor

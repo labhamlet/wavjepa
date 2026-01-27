@@ -1,199 +1,385 @@
-import os
-from functools import partial
-
+from torch.utils.data import DataLoader
 import pytorch_lightning as pl
-import webdataset as wds
+import webdataset as wds, RandomMix
+import torch
+import multiprocessing as mp
+import queue
+import random
+from typing import List
+import torch.nn.functional as F
 
-from .dataset_functions import _getitem_convolve
-from .iterators import NoiseIterator, SceneIterator
 
-os.environ["WDS_VERBOSE_CACHE"] = "1"
-os.environ["GOPEN_VERBOSE"] = "0"
+def mask_to_indices(mask: torch.BoolTensor, check: bool = False) -> torch.Tensor:
+    """
+    Returns the indices of the true elements.
+
+    Args:
+        mask: (*batch_dims, masked_dim)
+            Boolean mask. For every element, the number of true values in the masked dimension
+            should be the same. i.e. ``mask.sum(dim=-1)`` should be constant.
+        check: bool
+            If ``True``, check that the output is correct. Slower.
+
+    Returns:
+        indices: (*batch_dims, n_unmasked)
+            Indices of the true elements in the mask.
+    """
+
+    n_true = mask.sum(dim=-1).unique()
+    assert n_true.size(0) == 1
+    n_true = int(n_true.item())
+    batch_dims = list(mask.shape[:-1])
+    if check:
+        out = mask.nonzero(as_tuple=False)
+        out = out.view(*batch_dims, n_true, len(batch_dims) + 1)
+        for i, d in enumerate(batch_dims):
+            for j in range(0, d):
+                assert (out[..., i].select(i, j) == j).all()
+        out = out[..., -1]
+    else:
+        *_, out = mask.nonzero(as_tuple=True)
+        out = out.view(*batch_dims, n_true)
+    return out.to(mask.device)
 
 
-def collate_fn(batch):
-    x, y, z = batch
-    # Here we get (BATCH_SIZE, NR_SAMPLES_PER_AUDIO, C, T, F)
-    # Flatten it to make (BATCH_SIZE * NR_SAMPLES_PER_AUDIO, C, T, F)
-    return x.flatten(start_dim=0, end_dim=1)
+# using cluster for frame masking hurts the performance, so just use the naive random sampling
+def gen_maskid_frame_tgt(masked_patches: torch.Tensor, mask_size: int = 100):
+    indices: List[int] = masked_patches.nonzero().flatten().tolist()  # type: ignore
+    mask_id: List[int] = random.sample(indices, mask_size)
+    return torch.tensor(mask_id)
+
+
+# using cluster for frame masking hurts the performance, so just use the naive random sampling
+def gen_maskid_frame(sequence_len: int = 512, mask_size: int = 100) -> torch.Tensor:
+    mask_id = random.sample(range(0, sequence_len), mask_size)
+    return torch.tensor(mask_id)
+
+
+def to_torch(sample):
+    return torch.from_numpy(sample[0])
+
+
+class NoiseDataManager:
+    """Manages RIR data loading with multiprocessing in the main process."""
+
+    def __init__(
+        self, noise_data_dir: str, buffer_size: int = 500, num_workers: int = 1
+    ):
+        self.noise_data_dir = noise_data_dir
+        self.buffer_size = buffer_size
+        self.num_workers = num_workers
+        self.manager = mp.Manager()
+        self.noise_queue = self.manager.Queue(maxsize=buffer_size)
+        self.stop_event = self.manager.Event()
+        self.processes = []
+        self.started = False
+
+    def _worker(self):
+        """Worker process to load RIR data."""
+
+        def to_torch(sample):
+            return torch.from_numpy(sample[0]).float()
+
+        shuffle_buffer = 100
+        dataset = (
+            wds.WebDataset(self.noise_data_dir, resampled=True, shardshuffle=False)
+            .repeat()
+            .shuffle(shuffle_buffer)
+            .decode("pil")
+            .to_tuple("npy")
+            .map(to_torch)
+        )
+
+        loader = iter(
+            torch.utils.data.DataLoader(
+                dataset,
+                num_workers=self.num_workers,
+                prefetch_factor=4,
+                batch_size=None,
+            )
+        )
+        print("Noise Loader is set", flush=True)
+        while not self.stop_event.is_set():
+            try:
+                rirs = next(loader)
+                self.noise_queue.put(rirs, timeout=1.0)
+            except queue.Full:
+                continue
+
+    def start(self):
+        """Start the Noise loading process."""
+        if not self.started:
+            self.process = mp.Process(target=self._worker, daemon=False)
+            self.process.start()
+            self.started = True
+        return self
+
+    def __next__(self, timeout: float = 1.0):
+        """Get Noise data from the queue."""
+        try:
+            return self.noise_queue.get(timeout=timeout)
+        except queue.Empty:
+            # Return some default RIR data if queue is empty
+            return self.__next__()
+
+    def stop(self):
+        """Stop the Noise loading process."""
+        if self.started:
+            self.stop_event.set()
+            self.process.join(timeout=5.0)
+            if self.process.is_alive():
+                self.process.terminate()
+            self.started = False
+
+    def __del__(self):
+        """Ensure cleanup on deletion."""
+        self.stop()
+
+
+class RIRDataManager:
+    """Manages RIR data loading with multiprocessing in the main process."""
+
+    def __init__(self, rir_data_dir: str, buffer_size: int = 500, num_workers: int = 4):
+        self.rir_data_dir = rir_data_dir
+        self.buffer_size = buffer_size
+        self.num_workers = num_workers
+        self.manager = mp.Manager()
+        self.rir_queue = self.manager.Queue(maxsize=buffer_size)
+        self.stop_event = self.manager.Event()
+        self.processes = []
+        self.started = False
+
+    def _worker(self):
+        """Worker process to load RIR data."""
+
+        def to_torch(sample):
+            return torch.from_numpy(sample[0]).float()
+
+        shuffle_buffer = 100
+        dataset = (
+            wds.WebDataset(self.rir_data_dir, resampled=True, shardshuffle=False)
+            .repeat()
+            .shuffle(shuffle_buffer)
+            .decode("pil")
+            .to_tuple("npy")
+            .map(to_torch)
+        )
+
+        loader = iter(
+            torch.utils.data.DataLoader(
+                dataset,
+                num_workers=self.num_workers,
+                prefetch_factor=4,
+                batch_size=None,
+            )
+        )
+        print("RIR Loader is set", flush=True)
+        while not self.stop_event.is_set():
+            try:
+                rirs = next(loader)
+                self.rir_queue.put(rirs, timeout=1.0)
+            except queue.Full:
+                continue
+
+    def start(self):
+        """Start the RIR loading process."""
+        if not self.started:
+            self.process = mp.Process(target=self._worker, daemon=False)
+            self.process.start()
+            self.started = True
+        return self
+
+    def __next__(self, timeout: float = 1.0):
+        """Get RIR data from the queue."""
+        try:
+            return self.rir_queue.get(timeout=timeout)
+        except queue.Empty:
+            # Return some default RIR data if queue is empty
+            return self.__next__()
+
+    def stop(self):
+        """Stop the RIR loading process."""
+        if self.started:
+            self.stop_event.set()
+            self.process.join(timeout=5.0)
+            if self.process.is_alive():
+                self.process.terminate()
+            self.started = False
+
+    def __del__(self):
+        """Ensure cleanup on deletion."""
+        self.stop()
 
 
 class WebAudioDataModule(pl.LightningDataModule):
-    """
-    A PyTorch Lightning DataModule for audio data processing with WebDataset support.
-
-    This class handles loading and preprocessing of audio data for training deep learning
-    models. It supports room impulse response (RIR) augmentation, noise mixing, and
-    configurable preprocessing for audio spectrograms.
-
-    Parameters
-    ----------
-    base_data_dir : str
-        Directory path to the base training data in WebDataset format.
-    val_data_dir : str
-        Directory path to the validation data in WebDataset format.
-    base_rir_dir : str
-        Base directory containing room impulse response (RIR) data.
-    rir_data_dir : str
-        Specific directory path within base_rir_dir for RIR data access.
-    base_noise_dir : str
-        Directory containing noise samples for audio augmentation.
-    load_scenes_with_noise : bool
-        Whether to load acoustic scenes with added noise.
-    num_mel_bins : int
-        Number of mel frequency bins for spectrogram transformation.
-    target_length : int
-        Target length of processed audio segments.
-    input_length : int
-        Input length of raw audio segments.
-    batch_size : int, optional
-        Batch size for dataloaders, default is 32.
-    nr_samples_per_audio : int, optional
-        Number of samples to extract from each audio file, default is 32.
-    sr : int, optional
-        Sample rate for audio processing, default is 32000.
-    ambisonic : bool, optional
-        Whether to use ambisonic audio format, default is False.
-
-    Attributes
-    ----------
-    datapath : str
-        Path to training data directory.
-    val_path : str
-        Path to validation data directory.
-    rir_dir : str
-        Path to RIR base directory.
-    noise_dir : str
-        Path to noise samples directory.
-    melbins : int
-        Number of mel frequency bins.
-    target_length : int
-        Target length for processed audio.
-    input_length : int
-        Input length for raw audio.
-    batch_size : int
-        Batch size for dataloaders.
-    load_scenes_with_noise : bool
-        Flag for loading scenes with noise.
-    nr_samples_per_audio : int
-        Number of samples per audio file.
-    rir_data_dir : str
-        Directory for RIR data.
-    sr : int
-        Audio sample rate.
-    ambisonic : bool
-        Flag for ambisonic audio format.
-    audio_train : WebDataset
-        Training dataset (available after setup).
-    audio_val : WebDataset
-        Validation dataset (available after setup).
-    """
+    AUDIO_SR: int = 48000
+    NOISE_SR: int = 32000
+    TARGET_SECONDS: int = 10
+    SHUFFLE: int = 1000
+    NUM_WORKERS: int = 16
+    PREFETCH_FACTOR: int = 2
 
     def __init__(
         self,
-        base_data_dir: str,
-        val_data_dir: str,
-        base_rir_dir: str,
-        rir_data_dir: str,
-        base_noise_dir: str,
-        load_scenes_with_noise: bool,
-        target_length: int,
-        batch_size: int = 32,
-        nr_samples_per_audio: int = 32,
-        sr: int = 32000,
-        ambisonic: bool = False,
+        masker,
+        data_dirs: List[str],
+        mixing_weights: List[int],
+        rir_dir: str,
+        noise_dir: str,
+        batch_size: int = 96,
+        with_noise: bool = True,
+        with_rir: bool = True,
+        snr_low: int = 5,
+        snr_high: int = 40,
+        nr_samples_per_audio: int = 16,
+        nr_time_points: int = 100,
+        cache_size: int = 1000,
+        in_channels: int = 1,
+        **kwargs,
     ):
+        """Initialize the data module with shared noise data."""
         super().__init__()
-        self.datapath = base_data_dir
-        self.val_path = val_data_dir
-        self.rir_dir = base_rir_dir
-        self.noise_dir = base_noise_dir
-        self.target_length = target_length
+        self.data_dirs = data_dirs
+        self.mixing_weights = mixing_weights
         self.batch_size = batch_size
-        self.load_scenes_with_noise = load_scenes_with_noise
         self.nr_samples_per_audio = nr_samples_per_audio
-        self.rir_data_dir = rir_data_dir
-        self.sr = sr
-        self.ambisonic = ambisonic
+        self.cache_size = cache_size
+        self.nr_time_points = nr_time_points
 
-    def make_web_dataset(
-        self, path: str, split_scene: str, split_noise: str, shuffle: int
-    ) -> wds.WebDataset:
+        self.with_noise = with_noise
+        self.with_rir = with_rir
+
+        self.with_noise = with_noise
+        self.with_rir = with_rir
+
+        self.masker = masker
+        if self.with_noise:
+            self.noise_loader = NoiseDataManager(noise_dir).start()
+
+        if self.with_rir:
+            self.rir_loader = RIRDataManager(rir_dir).start()
+
+        self.snr_low = snr_low
+        self.snr_high = snr_high
+
+        self.noise_target_length = self.NOISE_SR * self.TARGET_SECONDS
+        self.audio_target_length = self.AUDIO_SR * self.TARGET_SECONDS
+
+        self.in_channels = in_channels
+
+    def _retrieve_sample(self, sample):
+        """Retrieves audio, noise, and RIR samples from disk
+        Normalization is done later in the CoRA module.
         """
-        Create a WebDataset pipeline for audio processing.
 
-        This method sets up a data processing pipeline that loads audio files,
-        applies room impulse responses, adds noise, and prepares batches for training.
+        # Initialize all variables
+        noise = None
+        source_rir = None
+        noise_length = None
+        snr = None
 
-        Parameters
-        ----------
-        path : str
-            Path to the WebDataset shards.
-        split_scene : str
-            Scene split name ('train', 'val', etc.) for RIR selection.
-        split_noise : str
-            Noise split name ('tr', 'cv', etc.) for noise sample selection.
-        shuffle : int
-            Number of samples to buffer for shuffling. 0 means no shuffling.
+        audio, audio_sr = sample[0]
+        audio = audio[0]  # Take the left channel if it is stereo audio
+        audio_length = audio.shape[-1]
+        padding = self.audio_target_length - audio_length
+        if padding > 0:
+            audio = F.pad(audio, (0, padding), "constant", 0)
+        elif padding < 0:  # select a random 10 seconds.
+            rand_index = torch.randint(0, audio_length - self.audio_target_length, (1,))
+            audio = audio[rand_index : rand_index + self.audio_target_length]
+        else:
+            audio = audio
+        assert audio.shape[-1] == self.audio_target_length
 
-        Returns
-        -------
-        WebDataset
-            Configured WebDataset pipeline for audio processing.
-        """
-        random_scene_iter = iter(
-            SceneIterator(
-                scenes=os.path.join(self.rir_dir, split_scene),
-                with_noise=self.load_scenes_with_noise,
-                rir_data_dir=self.rir_data_dir,
-                ambisonic=self.ambisonic,
-                sr=self.sr,
+        # If with the rir, load the rir.
+        if self.with_rir:
+            source_rir = next(self.rir_loader)[0, ...]
+
+        if self.with_noise:
+            # Raw noise can be longer or shorter than 10 seconds, and it is 32kHz.
+            raw_noise = next(self.noise_loader)
+            noise_length = raw_noise.shape[-1]
+            # raw_noise is longer than target seconds.
+            if noise_length > self.noise_target_length:
+                # Cut 10 seconds of noise randomly.
+                rand_index = torch.randint(
+                    0, noise_length - self.noise_target_length, (1,)
+                )
+                raw_noise = raw_noise[
+                    rand_index : rand_index + self.noise_target_length
+                ]
+            elif noise_length < self.noise_target_length:
+                # Here we know for sure that noise is either
+                padding = self.NOISE_SR * self.TARGET_SECONDS - raw_noise.shape[-1]
+                raw_noise = F.pad(raw_noise, (0, padding), "constant", 0)
+            else:
+                raw_noise = raw_noise
+
+            assert raw_noise.shape[-1] == self.noise_target_length
+            noise = raw_noise
+            snr = (
+                torch.distributions.uniform.Uniform(self.snr_low, self.snr_high)
+                .sample()
+                .item()
             )
+            snr = torch.Tensor([snr, snr])
+
+        context_mask, target_indices, ctx_and_target_masks = self.masker(
+            batch_size=self.nr_samples_per_audio,
+            n_times=self.nr_time_points,
+            in_channels=self.in_channels,
         )
-        random_noise_iter = iter(
-            NoiseIterator(noise_dir=os.path.join(self.noise_dir, split_noise))
+
+        return (
+            audio,
+            audio_sr,
+            source_rir,
+            noise,
+            noise_length,
+            snr,
+            context_mask,
+            target_indices,
+            ctx_and_target_masks,
         )
-        pre_process_function = partial(
-            _getitem_convolve,
-            random_scene_generator=random_scene_iter,
-            random_noise_generator=random_noise_iter,
-            target_length=self.target_length,
-            resample_sr=self.sr,
-            nr_samples_per_audio=self.nr_samples_per_audio,
-        )
-        # Create the WebDataset pipeline
-        dataset = (
-            wds.WebDataset(path, detshuffle=True)
-            .shuffle(shuffle)
-            .decode(wds.torch_audio, handler=wds.warn_and_continue)
-            .to_tuple("flac")
-            .map(pre_process_function)
-            .batched(self.batch_size)
-        )
-        return dataset
+
+    def make_web_dataset(self, path: str, shuffle: int):
+        """Create a WebDataset pipeline for audio processing."""
+        datasets = [] 
+        for data_path in self.data_dirs:
+            dataset = (
+                wds.WebDataset(
+                    data_path,
+                    resampled=True,
+                    nodesplitter=wds.shardlists.split_by_node,
+                    workersplitter=wds.shardlists.split_by_worker,
+                    shardshuffle=False,
+                )
+                .repeat()
+                .shuffle(shuffle)
+                .decode(wds.torch_audio, handler=wds.warn_and_continue)
+                .to_tuple("flac")
+                .map(self._retrieve_sample)
+                .batched(self.batch_size)
+            )
+            datasets.append(dataset)
+
+        mix = RandomMix(datasets, self.mixing_weights)
+        return mix
 
     def setup(self, stage: str):
-        # Assign train/val datasets for use in dataloaders
+        """Set up datasets for training."""
         if stage == "fit":
-            # Change these later!
             self.audio_train = self.make_web_dataset(
-                self.datapath, "test", "tr", shuffle=1000
-            )
-            self.audio_val = self.make_web_dataset(
-                self.val_path, "test", "cv", shuffle=0
+                shuffle=self.SHUFFLE
             )
 
     def train_dataloader(self):
-        loader = wds.WebLoader(
+        """Return the training DataLoader."""
+        loader = DataLoader(
             self.audio_train,
             batch_size=None,
             pin_memory=True,
-            num_workers=8,
-            prefetch_factor=4,  # What about a huge prefetch?
-            collate_fn=collate_fn,
-        )
-        # the batch_size is actually the nr_audio files to load * the nr_samples_per_audio!
-        loader.unbatched().shuffle(1000).batched(
-            self.batch_size * self.nr_samples_per_audio
+            num_workers=self.NUM_WORKERS,
+            prefetch_factor=self.PREFETCH_FACTOR,
         )
         return loader

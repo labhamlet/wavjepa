@@ -3,6 +3,7 @@ import json
 import os
 import threading
 from random import randrange
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -10,12 +11,12 @@ import torch.nn.functional as F
 
 
 def preprocess_rirs(reverb, sr):
-    """Pad the RIRs to be the same shape.
+    """Pad the RIRs to be the same shape. 
     Arguments
     ----------
-    reverb : nd.array
-        The RIR itself as torch.tensor
-    sr : int
+    reverb : nd.array 
+        The RIR itself as torch.tensor 
+    sr : int 
         The sampling rate of the RIR
     """
     reverb_padding = sr * 2 - reverb.shape[1]
@@ -35,11 +36,11 @@ class SceneIterator:
         The directory that contains the generated RIRs.
     scenes : str
         The directory that contains the metadata for generated scenes.
-    with_noise : bool
+    with_noise : bool 
         Indicate if we want to load the scene with noise.
-    ambisonic: bool
+    ambisonic: bool 
         Indicate if we want to load ambisonic RIRs for the scene
-    sr : int
+    sr : int 
         Sampling rate for the whole scene.
     """
 
@@ -50,15 +51,15 @@ class SceneIterator:
         with_noise: bool = True,
         ambisonic: bool = False,
         sr: int = 32000,
-        max_noise_sources=5,
+        max_noise_sources = 5
     ):
         print(scenes, flush=True)
-        scenes_json: list[str] = glob.glob(f"{scenes}/*.json")
-        self.scenes: list[dict[str, dict]] = []
+        scenes_json: List[str] = glob.glob(f"{scenes}/*.json")
+        self.scenes: List[Dict[str, dict]] = []
         self.max_len = 0
         self.rir_data_dir = rir_data_dir
         for scene in scenes_json:
-            with open(scene) as f:
+            with open(scene, "r") as f:
                 data = json.load(f)
                 self.scenes.extend(data["sampled_regions"])
                 self.max_len += len(data["sampled_regions"])
@@ -66,9 +67,8 @@ class SceneIterator:
         # Add a lock for thread safety
         self._lock = threading.RLock()
         self.ambisonic = ambisonic
-        self.sr = sr
+        self.sr = sr    
         self.max_noise_sources = max_noise_sources
-
     def __iter__(self):
         """
         Initialize the iterator.
@@ -115,9 +115,7 @@ class SceneIterator:
             source_rir = torch.tensor(np.load(source_rir_file)).float()
             source_rir = preprocess_rirs(source_rir, self.sr)
 
-            noise_rirs = torch.zeros(
-                (self.max_noise_sources, 4 if self.ambisonic else 2, self.sr * 2)
-            )
+            noise_rirs = torch.zeros((self.max_noise_sources, 4 if self.ambisonic else 2, self.sr * 2))
             if self.with_noise:
                 for i, noise in enumerate(selected_scene["region"]["scene"]["noise"]):
                     if self.ambisonic:

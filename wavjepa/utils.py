@@ -1,7 +1,6 @@
 import inspect
-
 import torch
-
+from typing import Tuple
 
 def has_len(v):
     try:
@@ -22,7 +21,7 @@ def get_default_args(func):
 
 def eq_dict(d1: dict, d2: dict):
     """Check if the dictionaries match on the keys that are present in both.
-
+    
     Example usage:
     >>> ctx, tgt = time_block_context_block_targets(n_ctx=1, n_times=15, n_ctx_blk=2, width_ctx_blk=5, width_tgt_blk=4, n_ctx_patches=10, n_tgt_per_ctx=1)
     >>> print(f"ctx: {mask_repr(ctx)}\ntgt: {mask_repr(tgt[0], false_char='?')}")
@@ -30,8 +29,8 @@ def eq_dict(d1: dict, d2: dict):
     return all(d1[k] == d2[k] for k in d1 if k in d2)
 
 
-def mask_repr(x: torch.Tensor, true_char="#", false_char="-"):
-    """String representation of a binary mask tensor."""
+def mask_repr(x:torch.Tensor, true_char="#", false_char="-"):
+    """ String representation of a binary mask tensor."""
     assert x.ndim < 3
     while x.ndim < 2:
         x = x.unsqueeze(0)
@@ -59,7 +58,6 @@ def expand_index_like(index: torch.Tensor, tokens: torch.Tensor) -> torch.Tensor
     index = index.unsqueeze(-1).expand(-1, -1, dim)
     return index
 
-
 def set_at_index(
     tokens: torch.Tensor, index: torch.Tensor, value: torch.Tensor
 ) -> torch.Tensor:
@@ -81,8 +79,9 @@ def set_at_index(
     index = expand_index_like(index, tokens)
     return torch.scatter(tokens, 1, index, value)
 
+    
 
-def repeat_token(token: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
+def repeat_token(token: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
     """Repeats a token size times.
 
     Args:

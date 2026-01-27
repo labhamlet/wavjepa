@@ -1,19 +1,21 @@
+
 from math import prod
 
 import torch
-from einops import rearrange
-from einops.layers.torch import Rearrange
 from torch import nn
+from einops.layers.torch import Rearrange
+from einops import rearrange
 
-from .audio_extractor import Extractor
+from typing import List, Optional
 
+from .audio_extractor import Extractor 
 
 class ConvChannelFeatureExtractor(Extractor, nn.Module):
     """
     Convolutional feature encoder for the audio data.
 
     Computes successive 1D convolutions (with activations) over the time
-    dimension of the audio signal. This encoder also uses different kernels for each time signal.
+    dimension of the audio signal. This encoder also uses different kernels for each time signal. 
     Therefore, in_channels argument is necessary!
 
     Inspiration from https://github.com/facebookresearch/fairseq/blob/main/fairseq/models/wav2vec/wav2vec2.py
@@ -31,7 +33,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
         mode: str
             Normalisation mode. Either``default`` or ``layer_norm``.
         conv_bias: bool
-        depthwise: bool
+        depthwise: bool 
             Perform depthwise convolutions rather than the full convolution.
     """
 
@@ -39,44 +41,41 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
         self,
         *args,
         conv_layers_spec: list[tuple[int, int, int]],
-        in_channels: int = 2,
+        in_channels : int = 2,
         dropout: float = 0.0,
         mode: str = "default",
         conv_bias: bool = False,
-        depthwise: bool = False,
-        share_weights_over_channels: bool = False,
+        depthwise : bool = False,
+        share_weights_over_channels : bool = False,
         **kwargs,
     ):
         assert mode in {"default", "layer_norm"}
-        super().__init__()  # type: ignore
+        super().__init__() # type: ignore
 
         def block(
-            n_in: int,
-            n_out: int,
-            k: int,
-            stride: int,
-            is_layer_norm: bool = False,
-            is_group_norm: bool = False,
-            conv_bias: bool = False,
-            depthwise: bool = True,
+            n_in : int,
+            n_out : int,
+            k : int,
+            stride : int,
+            is_layer_norm : bool =False,
+            is_group_norm : bool =False,
+            conv_bias : bool =False,
+            depthwise : bool = True,
         ):
+
             def make_conv():
                 if depthwise:
-                    assert n_out % n_in == 0, (
-                        f"For depthwise signals we can not have non-multipler of {n_out} and {n_in}"
-                    )
-                    conv = nn.Conv1d(
-                        n_in, n_out, k, stride=stride, bias=conv_bias, groups=n_in
-                    )
+                    assert n_out % n_in == 0, f"For depthwise signals we can not have non-multipler of {n_out} and {n_in}"
+                    conv = nn.Conv1d(n_in, n_out, k, stride=stride, bias=conv_bias, groups = n_in)
                 else:
                     conv = nn.Conv1d(n_in, n_out, k, stride=stride, bias=conv_bias)
 
                 nn.init.kaiming_normal_(conv.weight)
                 return conv
 
-            assert not (is_layer_norm and is_group_norm), (
-                "layer norm and group norm are exclusive"
-            )
+            assert not (
+                is_layer_norm and is_group_norm
+            ), "layer norm and group norm are exclusive"
 
             if is_layer_norm:
                 return nn.Sequential(
@@ -84,9 +83,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
                     nn.Dropout(p=dropout),
                     nn.Sequential(
                         Rearrange("... channels time -> ... time channels"),
-                        nn.LayerNorm(
-                            n_out, elementwise_affine=True
-                        ),  # Fixed: use n_out instead of dim
+                        nn.LayerNorm(n_out, elementwise_affine=True),  # Fixed: use n_out instead of dim
                         Rearrange("... time channels -> ... channels time"),
                     ),
                     nn.GELU(),
@@ -95,9 +92,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
                 return nn.Sequential(
                     make_conv(),
                     nn.Dropout(p=dropout),
-                    nn.GroupNorm(
-                        n_out, n_out, affine=True
-                    ),  # Fixed: use n_out instead of dim
+                    nn.GroupNorm(n_out, n_out, affine=True),  # Fixed: use n_out instead of dim
                     nn.GELU(),
                 )
             else:
@@ -114,7 +109,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
             for i, cl in enumerate(conv_layers_spec):
                 assert len(cl) == 3, "invalid conv definition: " + str(cl)
                 (dim, k, stride) = cl
-                conv_layers.append(  # type: ignore
+                conv_layers.append( # type: ignore
                     block(
                         in_d,
                         dim,
@@ -123,11 +118,11 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
                         is_layer_norm=mode == "layer_norm",
                         is_group_norm=mode == "default" and i == 0,
                         conv_bias=conv_bias,
-                        depthwise=self.depthwise,
+                        depthwise=self.depthwise
                     )
                 )
                 in_d = dim
-            cnn: nn.Module = nn.Sequential(*conv_layers)  # type: ignore
+            cnn : nn.Module = nn.Sequential(*conv_layers) # type: ignore
             self.embedding_dim = conv_layers_spec[-1][0]
             self.cnns.append(cnn)
         else:
@@ -137,7 +132,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
                 for i, cl in enumerate(conv_layers_spec):
                     assert len(cl) == 3, "invalid conv definition: " + str(cl)
                     (dim, k, stride) = cl
-                    conv_layers.append(  # type: ignore
+                    conv_layers.append( # type: ignore
                         block(
                             in_d,
                             dim,
@@ -146,17 +141,17 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
                             is_layer_norm=mode == "layer_norm",
                             is_group_norm=mode == "default" and i == 0,
                             conv_bias=conv_bias,
-                            depthwise=self.depthwise,
+                            depthwise=self.depthwise
                         )
                     )
                     in_d = dim
-                cnn: nn.Module = nn.Sequential(*conv_layers)  # type: ignore
+                cnn : nn.Module = nn.Sequential(*conv_layers) # type: ignore
                 self.cnns.append(cnn)
-
+        
         self.embedding_dim = self.conv_layers_spec[-1][0]
         self.weight_sharing = share_weights_over_channels
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x : torch.Tensor) -> torch.Tensor:
         """
         Args:
             x: (batch_size, n_chans, n_times)
@@ -177,13 +172,10 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
             else:
                 module = self.cnns[channel_index]
             processed = module(x[:, [channel_index], ...])
-            processed = rearrange(
-                processed,
-                "batch_size n_channels n_time -> batch_size n_time n_channels",
-            )
+            processed = rearrange(processed, "batch_size n_channels n_time -> batch_size n_time n_channels")
             out.append(processed)
-        processed = torch.stack(out, dim=1)
-        processed = torch.flatten(processed, start_dim=1, end_dim=2)
+        processed = torch.stack(out, dim = 1)
+        processed = torch.flatten(processed, start_dim = 1, end_dim = 2)
         return processed
 
     def total_patches(self, time: int) -> int:
@@ -194,7 +186,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
         return processed.shape[1]  # Return time dimension size
 
     @property
-    def receptive_fields(self) -> list[int]:
+    def receptive_fields(self) -> List[int]:
         rf = 1
         receptive_fields = [rf]
         for _, width, stride in reversed(self.conv_layers_spec):
@@ -202,9 +194,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
             receptive_fields.append(rf)
         return list(reversed(receptive_fields))
 
-    def description(
-        self, sfreq: int | None = None, dummy_time: int | None = None
-    ) -> str:
+    def description(self, sfreq : Optional[int] = None, dummy_time : Optional[int] = None) -> str:
         dims, _, strides = zip(*self.conv_layers_spec)
         receptive_fields = self.receptive_fields
         rf = receptive_fields[0]
@@ -222,8 +212,7 @@ class ConvChannelFeatureExtractor(Extractor, nn.Module):
             desc += f" | {n_times_out} encoded samples/trial"
 
         n_features = [
-            f"{dim}*{rf}"
-            for dim, rf in zip([self.in_channels] + list(dims), receptive_fields)
+            f"{dim}*{rf}" for dim, rf in zip([self.in_channels] + list(dims), receptive_fields)
         ]
         desc += f" | #features/sample at each layer (n_channels*n_times): [{', '.join(n_features)}] = {[eval(x) for x in n_features]}"
         return desc
