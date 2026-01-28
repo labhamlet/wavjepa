@@ -450,20 +450,20 @@ class JEPA(pl.LightningModule):
 
         # Expand scene and indices for gathering
         # scene: (B, C, L_full) -> (B, 1, C, L_full) -> (B, nr_samples, C, L_full)
-        scene_expanded = generated_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+        generated_scene_expanded = generated_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
         # indices: (B, nr_samples, target_length) -> (B, nr_samples, 1, target_length) -> (B, nr_samples, C, target_length)
         indices_expanded = indices.unsqueeze(2).expand(-1, -1, C, -1)
 
         # Gather all audio windows in one operation
         # Shape: (B, nr_samples, C, target_length)
-        return_audios = torch.gather(scene_expanded, 3, indices_expanded)
+        return_generated_audios = torch.gather(generated_scene_expanded, 3, indices_expanded)
 
         # 4. Vectorized instance normalization
         # To preserve ITD and ILD, normalize jointly across channels and time.
         # Calculate mean and std over the last two dimensions (C, L).
-        mean = return_audios.mean(dim=(-2, -1), keepdim=True)
-        std = return_audios.std(dim=(-2, -1), keepdim=True)
-        normalized_audios = (return_audios - mean) / (std + 1e-5) # Add epsilon for stability
+        mean = return_generated_audios.mean(dim=(-2, -1), keepdim=True)
+        std = return_generated_audios.std(dim=(-2, -1), keepdim=True)
+        normalized_generated_audios = (return_generated_audios - mean) / (std + 1e-5) # Add epsilon for stability
 
 
         clean_scene_expanded = clean_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
@@ -476,8 +476,8 @@ class JEPA(pl.LightningModule):
 
         # 5. Flatten, shuffle, and handle masks
         # Cast to bfloat16 and flatten batch and samples dimensions
-        flattened_generated = self.collate_fn(normalized_audios)
-        flattened_clean = self.collate_fn(normalized_clean_audios)
+        flattened_generated = self.collate_fn(normalized_generated_audios.to(torch.bfloat16))
+        flattened_clean = self.collate_fn(normalized_clean_audios.to(torch.bfloat16))
 
         # Shuffle the samples
         idx = torch.randperm(flattened_generated.size(0))
