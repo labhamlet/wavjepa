@@ -293,6 +293,7 @@ class WebAudioDataModule(pl.LightningDataModule):
         assert audio.shape[-1] == self.audio_target_length
 
         # If with the rir, load the rir.
+        # Here, take the source RIR.
         if self.with_rir:
             source_rir = next(self.rir_loader)[0, ...]
 

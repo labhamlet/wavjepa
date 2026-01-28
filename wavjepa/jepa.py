@@ -407,31 +407,22 @@ class JEPA(pl.LightningModule):
                 else:
                     placed_noise_batch[i] = current_noise[: self.target_audio_length]
         
-        aug_prob = random.random()
-
-        # With 0.8 probability we do not augment... so to find augment prob we need do 1 - self.augment_prob.
-        if aug_prob < self.clean_data_ratio:
-             #Do it in a list to make it look like a "batch"
-             placed_noise_batch = [None]
-             source_rir = [None]
-             noise_rirs = [None]
-             snr = [None]
         # Generate a naturalistic scene
         # This handles the sitatuion when rir is [None, None], and placed_noise_batch is [None, None]
         generated_scene = generate_scenes_batch.generate_scene(
             source_rir=source_rir,
             source=final_audio,
             noise=placed_noise_batch,
-            noise_rirs=noise_rirs,
-            snr=snr,
-            sr = ORIGINAL_SR
+            snr=snr       
         )
 
         generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
+        clean_audio = self.pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
+
         # We know that the original sr is 32000.
         if self.sr != ORIGINAL_SR:
             generated_scene = self.resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
-        
+            clean_scene = self.resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
         B, C, L_full = generated_scene.shape
@@ -465,18 +456,28 @@ class JEPA(pl.LightningModule):
         std = return_audios.std(dim=(-2, -1), keepdim=True)
         normalized_audios = (return_audios - mean) / (std + 1e-5) # Add epsilon for stability
 
+
+        clean_scene_expanded = clean_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+
+        return_clean_audios = torch.gather(clean_scene_expanded, 3, indices_expanded)
+
+        mean = return_clean_audios.mean(dim=(-2, -1), keepdim=True)
+        std = return_clean_audios.std(dim=(-2, -1), keepdim=True)
+        normalized_clean_audios = (return_clean_audios - mean) / (std + 1e-5) # Add epsilon for stability
+
         # 5. Flatten, shuffle, and handle masks
         # Cast to bfloat16 and flatten batch and samples dimensions
-        flattened = self.collate_fn(normalized_audios.to(torch.bfloat16))
+        flattened_generated = self.collate_fn(normalized_audios.to(torch.bfloat16))
+        flattened_clean = self.collate_fn(normalized_clean_audios.to(torch.bfloat16))
 
         # Shuffle the samples
-        idx = torch.randperm(flattened.size(0))
+        idx = torch.randperm(flattened_generated.size(0))
 
-        return flattened[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
+        return flattened_generated[idx, ...], flattened_clean[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> ForwardReturn:
-        audio_input, ctx_masks, target_indices, ctx_and_target_masks = batch
-        out = self(audio_input,ctx_masks, target_indices, ctx_and_target_masks)
+        generated_scene, clean_scene, ctx_masks, target_indices, ctx_and_target_masks = batch
+        out = self(generated_scene, clean_scene, ctx_masks, target_indices, ctx_and_target_masks)
 
         # Enhanced logging
         log_data = {
@@ -521,7 +522,7 @@ class JEPA(pl.LightningModule):
         return total_loss / (indices_count + 1e-8)
     
 
-    def forward(self, audio : torch.Tensor, ctx_masks, target_indices, ctx_and_target_masks) -> ForwardReturn:
+    def forward(self, generated_scene: torch.Tensor, clean_scene : torch.Tensor, ctx_masks, target_indices, ctx_and_target_masks) -> ForwardReturn:
         """
         Args:
             batch: torch.Tensor
@@ -547,13 +548,14 @@ class JEPA(pl.LightningModule):
         """
         # # Compute the local representations from the waveform
         # This extract audio can be also channel based, if it is channel based the channel are flatten to the sequencel length
-        local_features = self.extract_audio(audio)
-        local_features = self.feature_norms(local_features)
+        local_features_generated = self.extract_audio(generated_scene)
+        local_features_generated = self.feature_norms(local_features_generated)
         if self.post_extraction_mapper is not None:
-            local_features = self.post_extraction_mapper(local_features)
+            local_features_generated = self.post_extraction_mapper(local_features_generated)
         
-        local_features = local_features + self.pos_encoding_encoder
-        contextual_features = self.encoder_forward(local_features, src_key_padding_mask=ctx_masks)
+        local_features_generated = local_features_generated + self.pos_encoding_encoder
+
+        contextual_features = self.encoder_forward(local_features_generated, src_key_padding_mask=ctx_masks)
         # Accumulate contextual features on the batch dimensions
         contextual_features = contextual_features[~ctx_masks]
         contextual_features = self.encoder_to_decoder_mapper(contextual_features)
@@ -561,13 +563,20 @@ class JEPA(pl.LightningModule):
         preds = self.decoder_forward(contextual_features, ctx_masks, nr_targets = target_indices.shape[1], src_key_padding_mask=ctx_and_target_masks)
         
         # Compute the training targets using the teacher.
-        x_targets = local_features.detach()
-        targets = self._forward_teacher(x_targets)
+        local_features_clean = self.extract_audio(clean_scene)
+        local_features_clean = self.feature_norms(local_features_clean)
+        if self.post_extraction_mapper is not None:
+            local_features_clean = self.post_extraction_mapper(local_features_clean)
+        
+        local_features_clean = local_features_clean + self.pos_encoding_encoder
+        local_features_clean = local_features_clean.detach()
+        targets = self._forward_teacher(local_features_clean)
 
         loss = self.masked_loss(preds, targets, target_indices)
         
         return ForwardReturn(
-            local_features=local_features,
+            local_features_clean=local_features_clean,
+            local_features_generated=local_features_generated,
             contextual_features=contextual_features,
             loss=loss,
             preds=preds,
