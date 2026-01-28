@@ -340,6 +340,7 @@ class JEPA(pl.LightningModule):
             audio_batch,
             sr_batch,
             source_rir,
+            noise_rirs,
             noise,
             noise_lengths,
             snr,
