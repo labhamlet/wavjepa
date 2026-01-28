@@ -296,12 +296,12 @@ class WebAudioDataModule(pl.LightningDataModule):
         # If with the rir, load the rir.
         if self.with_rir:
             scene = next(self.rir_loader)
-            source_rir = scene[[0], ...]
-            if self.with_noise:
-                noise_rirs = scene[1:, ...]
+            source_rir = scene[0]
 
         if self.with_noise:
             # Raw noise can be longer or shorter than 10 seconds, and it is 32kHz.
+            if self.with_rir:
+                noise_rirs = rirs[1:]
             raw_noise = next(self.noise_loader)
             noise_length = raw_noise.shape[-1]
             # raw_noise is longer than target seconds.
