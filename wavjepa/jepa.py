@@ -421,8 +421,8 @@ class JEPA(pl.LightningModule):
         if final_audio.ndim != 3:
             final_audio = final_audio.unsqueeze(1)
         assert generated_scene.ndim == final_audio.ndim
-        clean_audio = self.pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
 
+        clean_audio = self.pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
         # We know that the original sr is 32000.
         if self.sr != ORIGINAL_SR:
             generated_scene = self.resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
@@ -431,10 +431,8 @@ class JEPA(pl.LightningModule):
         
 
         aug_prob = random.random()
-
-        # With 0.8 probability we do not augment... so to find augment prob we need do 1 - self.augment_prob.
         if aug_prob < self.clean_data_ratio:
-            generated_scene = clean_audio
+            generated_scene = clean_scene.clone()
 
         B, C, L_full = generated_scene.shape
 
@@ -478,8 +476,8 @@ class JEPA(pl.LightningModule):
 
         # 5. Flatten, shuffle, and handle masks
         # Cast to bfloat16 and flatten batch and samples dimensions
-        flattened_generated = self.collate_fn(normalized_audios.to(torch.bfloat16))
-        flattened_clean = self.collate_fn(normalized_clean_audios.to(torch.bfloat16))
+        flattened_generated = self.collate_fn(normalized_audios)
+        flattened_clean = self.collate_fn(normalized_clean_audios)
 
         # Shuffle the samples
         idx = torch.randperm(flattened_generated.size(0))
