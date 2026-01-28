@@ -4,8 +4,8 @@ sys.path.append("..")
 import torch
 from einops import rearrange, repeat
 
-from sjepa.jepa import JEPA
-from sjepa.types import TransformerEncoderCFG, TransformerLayerCFG
+from wavjepa.jepa import JEPA
+from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
 from .feature_helper import FeatureExtractor
 

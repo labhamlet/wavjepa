@@ -15,4 +15,4 @@ module load Anaconda3/2023.07-2
 source activate sjape
 
 
-python3 train.py data=audioset_no_rir_no_noise extractor=ConvFeatureExtractor trainer.batch_size=1
+python3 train.py data=audioset_no_rir_no_noise extractor=ConvFeatureExtractor trainer.batch_size=32

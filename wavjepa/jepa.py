@@ -23,7 +23,7 @@ from data_modules.scene_module import generate_scenes_batch, generate_scenes
 from data_modules.dataset_functions import pad_or_truncate_batch, normalize_audio_batch, normalize_audio
 
 ORIGINAL_SR=32000
-
+#Think about using weight decay from 0.04 to 0.4?
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
 
 def collate_fn(batch : List[torch.Tensor]) -> torch.Tensor:

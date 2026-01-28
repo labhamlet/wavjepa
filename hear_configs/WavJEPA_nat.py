@@ -1,7 +1,7 @@
 import torch
 
-from hear_api.runtime import RuntimeJEPA
-from sjepa.extractors import SpectrogramPatchExtractor
+from hear_api.runtime_natjepa import RuntimeNatJEPA
+from wavjepa.extractors import ConvChannelFeatureExtractor
 
 
 def load_model(*args, **kwargs):
@@ -14,21 +14,22 @@ def load_model(*args, **kwargs):
             map_location=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
         )
 
-    extractor = SpectrogramPatchExtractor(
-        n_mels=128,
-        sr=32000,
-        embedding_dim=768,
-        in_channels=1,
-        fshape=16,
-        tshape=8,
-        fstride=16,
-        tstride=8,
+    sr = kwargs.get("sr", 16000)
+    sr = int(sr)
+    model_size = kwargs.get("model", "base")
+
+    extractor = ConvChannelFeatureExtractor(
+        conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)]"),
+        in_channels=2,
+        share_weights_over_channels=False,
     )
-    model = RuntimeJEPA(
-        in_channels=1,
+    model = RuntimeNatJEPA(
+        in_channels=2,
         process_seconds=2.01,
         weights=weights,
-        is_spectrogram=True,
+        sr=sr,
+        model_size=model_size,
+        is_spectrogram=False,
         extractor=extractor,
     )
     return model

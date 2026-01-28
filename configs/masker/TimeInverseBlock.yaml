@@ -2,7 +2,7 @@ target_masks_per_context : 4
 context_mask_prob : 0.65
 context_mask_length : 10
 target_prob : 0.25
-target_length : 10
+target_length : 5
 ratio_cutoff : 0.1
 channel_based_masking : False
 name: time-inverse-masker

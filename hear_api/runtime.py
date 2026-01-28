@@ -3,8 +3,8 @@ import sys
 sys.path.append("..")
 import torch
 
-from sjepa.jepa import JEPA
-from sjepa.types import TransformerEncoderCFG, TransformerLayerCFG
+from wavjepa.jepa import JEPA
+from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
 from .feature_helper import FeatureExtractor
 

@@ -1,7 +1,7 @@
 import torch
 
 from hear_api.runtime import RuntimeJEPA
-from sjepa.extractors import ConvFeatureExtractor
+from wavjepa.extractors import ConvFeatureExtractor
 
 
 def load_model(*args, **kwargs):
@@ -14,9 +14,9 @@ def load_model(*args, **kwargs):
             map_location=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
         )
 
-    sr = kwargs.get("sr", 32000)
+    sr = kwargs.get("sr", 16000)
     sr = int(sr)
-    model_size = kwargs.get("model", 32000)
+    model_size = kwargs.get("model", "base")
 
     extractor = ConvFeatureExtractor(
         conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)]"),

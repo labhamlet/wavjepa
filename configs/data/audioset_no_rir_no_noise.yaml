@@ -1,5 +1,5 @@
-data_dirs: ["/gpfs/work3/2/managed_datasets/hf_cache_dir/datasets--agkphysics--AudioSet/snapshots/5a2fa42a1506470d275a47ff8e1fdac5b364e6ef/data/unbal_train{000..869}.tar"]
-mixing_weights: [1.0]
+data_dirs: ["/gpfs/work3/2/managed_datasets/hf_cache_dir/datasets--agkphysics--AudioSet/snapshots/5a2fa42a1506470d275a47ff8e1fdac5b364e6ef/data/unbal_train{000..869}.tar", "/projects/0/prjs1338/libri/webdataset_output/shard-{000000..000112}.tar"]
+mixing_weights: [1.0, 0.25]
 noise_dir: "/projects/0/prjs1338/noise/wham_noise/tr/webdataset_output_32000/shard-{000000..000019}.tar"
 rir_dir: "/projects/0/prjs1338/SequentialBinauralRIRs32000/train/webdataset_output/shard-{000000..000069}.tar"
 sr: 16000
