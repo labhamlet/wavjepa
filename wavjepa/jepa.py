@@ -114,7 +114,7 @@ class JEPA(pl.LightningModule):
         use_gradient_checkpointing: bool = False,
         compile_modules : bool = False,
         is_spectrogram : bool = True,
-        clean_data_ratio : float = 0.2,
+        clean_data_ratio : float = 0.0,
         size : str = "base",
         **kwargs : dict[str, Any],
     ):
@@ -128,6 +128,7 @@ class JEPA(pl.LightningModule):
         self.valid_len_44k = int(self.TARGET_SECONDS * 44100)
         self.valid_len_32k = int(self.TARGET_SECONDS * 32000)
         self.target_audio_length = self.TARGET_SECONDS * ORIGINAL_SR
+        self.clean_data_ratio = clean_data_ratio
 
         self.sr = resample_sr 
         self.is_spectrogram = is_spectrogram
@@ -138,7 +139,6 @@ class JEPA(pl.LightningModule):
         self.use_compiled_forward = compile_modules
         self.use_gradient_checkpointing = use_gradient_checkpointing
         self.in_channels = in_channels
-        self.clean_data_ratio = clean_data_ratio
         self.save_hyperparameters(
             ignore=["feature_encoder", "feature_extractor", "loss_fn"]
         )
@@ -417,6 +417,10 @@ class JEPA(pl.LightningModule):
         )
 
         generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
+        #Add channel dimension to the final audio as well.
+        if final_audio.ndim != 3:
+            final_audio = final_audio.unsqueeze(1)
+        assert generated_scene.ndim == final_audio.ndim
         clean_audio = self.pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
 
         # We know that the original sr is 32000.
@@ -425,6 +429,13 @@ class JEPA(pl.LightningModule):
             clean_scene = self.resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
+
+        aug_prob = random.random()
+
+        # With 0.8 probability we do not augment... so to find augment prob we need do 1 - self.augment_prob.
+        if aug_prob < self.clean_data_ratio:
+            generated_scene = clean_audio
+
         B, C, L_full = generated_scene.shape
 
         # 3. Vectorized window sampling

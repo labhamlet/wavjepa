@@ -217,6 +217,8 @@ def create_data_module(cfg, nr_patches) -> pl.LightningDataModule:
         nr_time_points=nr_patches,
         with_rir=cfg.data.with_rir,
         with_noise=cfg.data.with_noise,
+        snr_high=cfg.data.snr_high, 
+        snr_low=cfg.data.snr_low
     )
 
 

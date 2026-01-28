@@ -324,7 +324,6 @@ class WebAudioDataModule(pl.LightningDataModule):
                 .sample()
                 .item()
             )
-            snr = torch.Tensor([snr, snr])
 
         context_mask, target_indices, ctx_and_target_masks = self.masker(
             batch_size=self.nr_samples_per_audio,

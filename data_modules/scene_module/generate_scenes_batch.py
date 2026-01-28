@@ -6,7 +6,7 @@ from typing import List
 
 import torch
 import torchaudio
-import torch.nn.functional as F
+import torchaudio.functional as F
 
 
 def convolve_with_rir(waveform: torch.Tensor, rir: torch.Tensor) -> torch.Tensor:
