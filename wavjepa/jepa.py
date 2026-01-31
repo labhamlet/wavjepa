@@ -416,13 +416,23 @@ class JEPA(pl.LightningModule):
                 else: 
                     placed_noise_batch[i] = current_noise[: self.target_audio_length]
         
+        progress = self.global_step / max(1, self.trainer.max_steps)
+        progress =  max(0.0, min(1.0, progress)) # Clamp between 0 and 1
+        
+        # At step 0: Boost SNR by +20dB (Noise is very quiet)
+        # At step Max: Boost SNR by +0dB (Noise is at normal/hard levels)
+        start_snr_boost = 40.0 
+        current_snr_boost = start_snr_boost * (1.0 - progress)
+
+        print(f"Average SNR is: {(snr + current_snr_boost).mean()}")
+
         # Generate a naturalistic scene
         # This handles the sitatuion when rir is [None, None], and placed_noise_batch is [None, None]
         generated_scene = generate_scenes_batch.generate_scene(
             source_rir=source_rir,
             source=final_audio,
             noise=placed_noise_batch,
-            snr=snr       
+            snr=snr + current_snr_boost      
         )
 
         generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
@@ -439,12 +449,8 @@ class JEPA(pl.LightningModule):
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
 
-        if random.random() < self.clean_data_ratio:
-            generated_scene = clean_scene.clone()
-
         B, C, L_full = generated_scene.shape
 
-        # 3. Vectorized window sampling
         # Generate all random start indices at once
         rand_starts = torch.randint(
             0, L_full - self.target_length + 1,
@@ -466,7 +472,6 @@ class JEPA(pl.LightningModule):
         # Shape: (B, nr_samples, C, target_length)
         return_generated_audios = torch.gather(generated_scene_expanded, 3, indices_expanded)
 
-        # 4. Vectorized instance normalization
         # To preserve ITD and ILD, normalize jointly across channels and time.
         # Calculate mean and std over the last two dimensions (C, L).
         mean = return_generated_audios.mean(dim=(-2, -1), keepdim=True)
@@ -482,7 +487,6 @@ class JEPA(pl.LightningModule):
         std = return_clean_audios.std(dim=(-2, -1), keepdim=True)
         normalized_clean_audios = (return_clean_audios - mean) / (std + 1e-5) # Add epsilon for stability
 
-        # 5. Flatten, shuffle, and handle masks
         # Cast to bfloat16 and flatten batch and samples dimensions
         flattened_generated = self.collate_fn(normalized_generated_audios.to(torch.bfloat16))
         flattened_clean = self.collate_fn(normalized_clean_audios.to(torch.bfloat16))

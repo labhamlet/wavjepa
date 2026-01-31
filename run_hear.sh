@@ -65,7 +65,7 @@ model_name="hear_configs.WavJEPA"
 sr=16000
 model_size=base
 
-weights="/gpfs/work5/0/prjs1261/save_model_jepa_final_from_naturalistic_mixing/InChannels=1/WithNoise=False/WithRIR=False/CleanRatio=1.0/Extractor=spatial-conv-extractor-removed-last/ShareWeights=False/SR=16000/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=${step}.ckpt"
+weights="/gpfs/work5/0/prjs1261/wavjepa_base_final/step=${step}.ckpt"
 
 model_options="{\"sr\": \"$sr\", \"model\": \"$model_size\"}"
 
