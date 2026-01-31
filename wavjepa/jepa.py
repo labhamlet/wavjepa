@@ -433,11 +433,10 @@ class JEPA(pl.LightningModule):
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
 
-        #In the beggining of training this is high, we learn the audio.
-        #As the training progresses, increase this to make the student learn to denoise,
-        current_step_ratio = self.get_aug_prob()
-        print(f"current clean ratio is: {current_step_ratio}")
-        if torch.rand(1).item() < current_step_ratio:
+
+        #If clean data ratio is 1.0, then we always have clean data
+        #If clean data ratio is 0.0 then we always have noisy data
+        if random.random() < self.clean_data_ratio:
             generated_scene = clean_scene.clone()
 
         B, C, L_full = generated_scene.shape
