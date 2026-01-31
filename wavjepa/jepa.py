@@ -410,24 +410,13 @@ class JEPA(pl.LightningModule):
                 else:
                     placed_noise_batch[i] = current_noise[: self.target_audio_length]
         
-        
-        progress = self.global_step / max(1, self.trainer.max_steps)
-        progress =  max(0.0, min(1.0, progress)) # Clamp between 0 and 1
-        
-        # At step 0: Boost SNR by +20dB (Noise is very quiet)
-        # At step Max: Boost SNR by +0dB (Noise is at normal/hard levels)
-        start_snr_boost = 40.0 
-        current_snr_boost = start_snr_boost * (1.0 - progress)
-
-        print(f"Average SNR is: {(snr + current_snr_boost).mean()}")
-
         # Generate a naturalistic scene
         # This handles the sitatuion when rir is [None, None], and placed_noise_batch is [None, None]
         generated_scene = generate_scenes_batch.generate_scene(
             source_rir=source_rir,
             source=final_audio,
             noise=placed_noise_batch,
-            snr=snr + current_snr_boost      
+            snr=snr       
         )
 
         generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
@@ -444,13 +433,12 @@ class JEPA(pl.LightningModule):
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
 
-        # #In the beggining of training this is high, we learn the audio.
-        # #As the training progresses, increase this to make the student learn to denoise.
-        # current_step_ratio = self.get_aug_prob()
+        #In the beggining of training this is high, we learn the audio.
+        #As the training progresses, increase this to make the student learn to denoise,
+        current_step_ratio = self.get_aug_prob()
 
-        # # aug_prob = random.random()
-        # if torch.rand(1).item() < current_step_ratio:
-        #     generated_scene = clean_scene.clone()
+        if torch.rand(1).item() < current_step_ratio:
+            generated_scene = clean_scene.clone()
 
         B, C, L_full = generated_scene.shape
 

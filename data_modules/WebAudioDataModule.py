@@ -312,12 +312,11 @@ class WebAudioDataModule(pl.LightningDataModule):
             raw_noise = next(self.noise_loader)
             noise_length = max(raw_noise.shape)
             noise = pad_or_randomly_select(raw_noise, self.noise_target_length)
-            snr = 0
-            # snr = (
-            #     torch.distributions.uniform.Uniform(self.snr_low, self.snr_high)
-            #     .sample()
-            #     .item()
-            # )
+            snr = (
+                torch.distributions.uniform.Uniform(self.snr_low, self.snr_high)
+                .sample()
+                .item()
+            )
 
         context_mask, target_indices, ctx_and_target_masks = self.masker(
             batch_size=self.nr_samples_per_audio,
