@@ -202,47 +202,48 @@ class JEPA(pl.LightningModule):
                 nn.init.constant_(m.bias, 0)
 
     def _get_pos_embed_params(self, embedding_dim):
-            """Calculates the pos embedding embedding parameters and returns them."""
-            # Update positional embedding
-            pos_embed = nn.Parameter(
-                torch.zeros(
-                    1,
-                    self.total_patches,
-                    embedding_dim,
-                ),
-                requires_grad=False,
+        """Calculates the pos embedding embedding parameters and returns them."""
+        # Update positional embedding
+        pos_embed = nn.Parameter(
+            torch.zeros(
+                1,
+                self.total_patches,
+                embedding_dim,
+            ),
+            requires_grad=False,
+        )
+        positions = np.arange(self.total_patches, dtype=np.float64)
+        
+        if self.is_spectrogram:
+            # If it is a spectrogram, we use 2d sincos embeddings.
+            pos_embed_data = get_2d_sincos_pos_embed(
+                embedding_dim, self.extract_audio.grid_size, cls_token_num=0
             )
+        elif self.in_channels == 2:
+            # We use 1D sincos embeddings with channel number indicated on the embedding.
+            # We assume total_patches is (time_steps * channels).
+            if self.total_patches % self.in_channels != 0:
+                raise ValueError(
+                    f"total_patches ({self.total_patches}) must be divisible by "
+                    f"in_channels ({self.in_channels}) for binaural embeddings."
+                )
             
-            positions = np.arange(self.total_patches, dtype=np.float64)
-            
-            if self.is_spectrogram:
-                # If it is a spectrogram, we use 2d sincos embeddings.
-                pos_embed_data = get_2d_sincos_pos_embed(
-                    embedding_dim, self.extract_audio.grid_size, cls_token_num=0
-                )
-            elif self.in_channels > 1:
-                # We use 1D sincos embeddings with channel number indicated on the embedding.
-                # We assume total_patches is (time_steps * channels).
-                if self.total_patches % self.in_channels != 0:
-                    raise ValueError(
-                        f"total_patches ({self.total_patches}) must be divisible by "
-                        f"in_channels ({self.in_channels}) for binaural embeddings."
-                    )
-                
-                print(f"Using Binaural Positional Embeddings for {self.in_channels} channels")
-                pos_embed_data = get_binaural_pos_embed(
-                    embedding_dim, 
-                    time_steps=self.total_patches // self.in_channels
-                )
-            else:
-                # If it is plain audio (mono) or channel-mixed, we use standard 1d sincos embeddings
-                pos_embed_data = get_1d_sincos_pos_embed_from_grid(
-                    embedding_dim,
-                    positions,
-                )
-    
-            pos_embed.data.copy_(torch.from_numpy(pos_embed_data).float().unsqueeze(0))
-            return pos_embed
+            print(f"Using Binaural Positional Embeddings for {self.in_channels} channels")
+            pos_embed_data = get_binaural_pos_embed(
+                embedding_dim, 
+                time_steps=self.total_patches // self.in_channels
+            )
+        elif self.in_channels == 1:
+            # IF it is plain audio, we used 1d sincos embeddings
+            pos_embed_data = get_1d_sincos_pos_embed_from_grid(
+                embedding_dim,
+                positions,
+            )
+        else:
+            raise Exception(f"Not supported for audio channels more than 2, you got {self.in_channels}")
+        
+        pos_embed.data.copy_(torch.from_numpy(pos_embed_data).float().unsqueeze(0))
+        return pos_embed
 
     def _init_teacher(self):
         self.teacher_encoder = copy.deepcopy(self.encoder)
