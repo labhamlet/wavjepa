@@ -433,9 +433,6 @@ class JEPA(pl.LightningModule):
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
 
-
-        #If clean data ratio is 1.0, then we always have clean data
-        #If clean data ratio is 0.0 then we always have noisy data
         if random.random() < self.clean_data_ratio:
             generated_scene = clean_scene.clone()
 
