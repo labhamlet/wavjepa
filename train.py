@@ -12,7 +12,7 @@ from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
 from wavjepa.masking import RandomClusterMaskMaker, RandomMaskMaker, TimeInverseBlockMasker, MultiBlockMaskMaker
-from wavjepa.extractors import ConvFeatureExtractor, ConvChannelFeatureExtractor, Extractor
+from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
 
@@ -155,7 +155,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/saved_models_jepa/",
+        f"{cfg.save_dir}/tb_logs_jepa_real_noise_curic/",
         name=identity.replace("_", "/"),
     )
 
@@ -165,10 +165,10 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_mixed/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_real_noise_curic/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
-        every_n_train_steps=10000,
+        every_n_train_steps=25000,
         save_last=True,
         enable_version_counter=True,
         save_top_k=-1,

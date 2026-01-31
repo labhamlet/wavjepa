@@ -21,7 +21,6 @@ from scipy.optimize import linear_sum_assignment
 
 eps = np.finfo(np.float64).eps
 
-
 def convert_output_format_cartesian_to_polar(in_dict):
     out_dict = {}
     for frame_cnt in in_dict.keys():
@@ -35,7 +34,6 @@ def convert_output_format_cartesian_to_polar(in_dict):
                 out_dict[frame_cnt].append([tmp_val[0], tmp_val[1], azimuth, elevation])
     return out_dict
 
-
 def convert_output_format_new_to_old(in_dict):
     out_dict = {}
     for frame_cnt in in_dict.keys():
@@ -47,7 +45,6 @@ def convert_output_format_new_to_old(in_dict):
                 out_dict[frame_cnt].append([tmp_val[0], az, el])
     return out_dict
 
-
 def compute_seld_metric(sed_error, doa_error):
     """
     Compute SELD metric from sed and doa errors.
@@ -56,21 +53,23 @@ def compute_seld_metric(sed_error, doa_error):
     :param doa_error: [doa error (in degrees), frame recall (0 to 1 range)]
     :return: seld metric result
     """
-    seld_metric = np.mean(
-        [sed_error[0], 1 - sed_error[1], doa_error[0] / 180, 1 - doa_error[1]]
-    )
+    seld_metric = np.mean([
+        sed_error[0],
+        1 - sed_error[1],
+        doa_error[0]/180,
+        1 - doa_error[1]]
+        )
     return seld_metric
 
-
 class SELDMetrics(object):
-    def __init__(self, doa_threshold=20, nb_classes=11, average="macro"):
-        """
+    def __init__(self, doa_threshold=20, nb_classes=11, average='macro'):
+        '''
             This class implements both the class-sensitive localization and location-sensitive detection metrics.
             Additionally, based on the user input, the corresponding averaging is performed within the segment.
 
         :param nb_classes: Number of sound classes. In the paper, nb_classes = 11
         :param doa_thresh: DOA threshold for location sensitive detection.
-        """
+        '''
         self._nb_classes = nb_classes
 
         # Variables for Location-senstive detection performance
@@ -104,58 +103,48 @@ class SELDMetrics(object):
         :param doa_error: [doa error (in degrees), frame recall (0 to 1 range)]
         :return: early stopping metric result
         """
-        seld_metric = np.mean([_er, 1 - _f, _le / 180, 1 - _lr], 0)
+        seld_metric = np.mean([
+            _er,
+            1 - _f,
+            _le / 180,
+            1 - _lr
+        ], 0)
         return seld_metric
 
     def compute_seld_scores(self):
-        """
+        '''
         Collect the final SELD scores
 
         :return: returns both location-sensitive detection scores and class-sensitive localization scores
-        """
+        '''
         ER = (self._S + self._D + self._I) / (self._Nref.sum() + eps)
         classwise_results = []
-        if self._average == "micro":
+        if self._average == 'micro':
             # Location-sensitive detection performance
-            F = self._TP.sum() / (
-                eps
-                + self._TP.sum()
-                + self._FP_spatial.sum()
-                + 0.5 * (self._FP.sum() + self._FN.sum())
-            )
+            F = self._TP.sum() / (eps + self._TP.sum() + self._FP_spatial.sum() + 0.5 * (self._FP.sum() + self._FN.sum()))
 
             # Class-sensitive localization performance
-            LE = (
-                self._total_DE.sum() / float(self._DE_TP.sum() + eps)
-                if self._DE_TP.sum()
-                else 180
-            )
+            LE = self._total_DE.sum() / float(self._DE_TP.sum() + eps) if self._DE_TP.sum() else 180
             LR = self._DE_TP.sum() / (eps + self._DE_TP.sum() + self._DE_FN.sum())
 
             SELD_scr = self.early_stopping_metric(ER, F, LE, LR)
 
-        elif self._average == "macro":
+        elif self._average == 'macro':
             # Location-sensitive detection performance
-            F = self._TP / (
-                eps + self._TP + self._FP_spatial + 0.5 * (self._FP + self._FN)
-            )
+            F = self._TP / (eps + self._TP + self._FP_spatial + 0.5 * (self._FP + self._FN))
 
             # Class-sensitive localization performance
             LE = self._total_DE / (self._DE_TP + eps)
-            LE[self._DE_TP == 0] = 180.0
+            LE[self._DE_TP==0] = 180.0
             LR = self._DE_TP / (eps + self._DE_TP + self._DE_FN)
 
-            SELD_scr = self.early_stopping_metric(
-                np.repeat(ER, self._nb_classes), F, LE, LR
-            )
-            classwise_results = np.array(
-                [np.repeat(ER, self._nb_classes), F, LE, LR, SELD_scr]
-            )
+            SELD_scr = self.early_stopping_metric(np.repeat(ER, self._nb_classes), F, LE, LR)
+            classwise_results = np.array([np.repeat(ER, self._nb_classes), F, LE, LR, SELD_scr])
             F, LE, LR, SELD_scr = F.mean(), LE.mean(), LR.mean(), SELD_scr.mean()
         return ER, F, LE, LR, SELD_scr, classwise_results
 
     def update_seld_scores(self, pred, gt):
-        """
+        '''
         Implements the spatial error averaging according to equation 5 in the paper [1] (see papers in the title of the code).
         Adds the multitrack extensions proposed in paper [2]
 
@@ -163,21 +152,13 @@ class SELDMetrics(object):
 
         :param pred: dictionary containing class-wise prediction results for each N-seconds segment block
         :param gt: dictionary containing class-wise groundtruth for each N-seconds segment block
-        """
+        '''
         for block_cnt in range(len(gt.keys())):
             loc_FN, loc_FP = 0, 0
             for class_cnt in range(self._nb_classes):
                 # Counting the number of referece tracks for each class in the segment
-                nb_gt_doas = (
-                    max([len(val) for val in gt[block_cnt][class_cnt][0][1]])
-                    if class_cnt in gt[block_cnt]
-                    else None
-                )
-                nb_pred_doas = (
-                    max([len(val) for val in pred[block_cnt][class_cnt][0][1]])
-                    if class_cnt in pred[block_cnt]
-                    else None
-                )
+                nb_gt_doas = max([len(val) for val in gt[block_cnt][class_cnt][0][1]]) if class_cnt in gt[block_cnt] else None
+                nb_pred_doas = max([len(val) for val in pred[block_cnt][class_cnt][0][1]]) if class_cnt in pred[block_cnt] else None
                 if nb_gt_doas is not None:
                     self._Nref[class_cnt] += nb_gt_doas
                 if class_cnt in gt[block_cnt] and class_cnt in pred[block_cnt]:
@@ -195,35 +176,24 @@ class SELDMetrics(object):
                     for gt_ind, gt_val in enumerate(gt_ind_list):
                         if gt_val in pred_ind_list:
                             gt_arr = np.array(gt[block_cnt][class_cnt][0][1][gt_ind])
-                            gt_ids = np.arange(
-                                len(gt_arr[:, -1])
-                            )  # TODO if the reference has track IDS use here - gt_arr[:, -1]
+                            gt_ids = np.arange(len(gt_arr[:, -1])) #TODO if the reference has track IDS use here - gt_arr[:, -1]
                             gt_doas = gt_arr[:, 1:]
 
                             pred_ind = pred_ind_list.index(gt_val)
-                            pred_arr = np.array(
-                                pred[block_cnt][class_cnt][0][1][pred_ind]
-                            )
+                            pred_arr = np.array(pred[block_cnt][class_cnt][0][1][pred_ind])
                             pred_doas = pred_arr[:, 1:]
 
-                            if (
-                                gt_doas.shape[-1] == 2
-                            ):  # convert DOAs to radians, if the input is in degrees
-                                gt_doas = gt_doas * np.pi / 180.0
-                                pred_doas = pred_doas * np.pi / 180.0
+                            if gt_doas.shape[-1] == 2: # convert DOAs to radians, if the input is in degrees
+                                gt_doas = gt_doas * np.pi / 180.
+                                pred_doas = pred_doas * np.pi / 180.
 
-                            dist_list, row_inds, col_inds = (
-                                least_distance_between_gt_pred(gt_doas, pred_doas)
-                            )
+                            dist_list, row_inds, col_inds = least_distance_between_gt_pred(gt_doas, pred_doas)
 
                             # Collect the frame-wise distance between matched ref-pred DOA pairs
                             for dist_cnt, dist_val in enumerate(dist_list):
                                 matched_gt_track = gt_ids[row_inds[dist_cnt]]
                                 if matched_gt_track not in matched_track_dist:
-                                    (
-                                        matched_track_dist[matched_gt_track],
-                                        matched_track_cnt[matched_gt_track],
-                                    ) = [], []
+                                    matched_track_dist[matched_gt_track], matched_track_cnt[matched_gt_track] = [], []
                                 matched_track_dist[matched_gt_track].append(dist_val)
                                 matched_track_cnt[matched_gt_track].append(pred_ind)
 
@@ -237,12 +207,8 @@ class SELDMetrics(object):
                         # for the associated ref-pred tracks compute the metrics
                         for track_id in matched_track_dist:
                             total_spatial_dist = sum(matched_track_dist[track_id])
-                            total_framewise_matching_doa = len(
-                                matched_track_cnt[track_id]
-                            )
-                            avg_spatial_dist = (
-                                total_spatial_dist / total_framewise_matching_doa
-                            )
+                            total_framewise_matching_doa = len(matched_track_cnt[track_id])
+                            avg_spatial_dist = total_spatial_dist / total_framewise_matching_doa
 
                             # Class-sensitive localization performance
                             self._total_DE[class_cnt] += avg_spatial_dist
@@ -258,14 +224,14 @@ class SELDMetrics(object):
                         # than reference tracks count as FP, if it less than reference count as FN
                         if nb_pred_doas > nb_gt_doas:
                             # False positive
-                            loc_FP += nb_pred_doas - nb_gt_doas
-                            self._FP[class_cnt] += nb_pred_doas - nb_gt_doas
-                            self._DE_FP[class_cnt] += nb_pred_doas - nb_gt_doas
+                            loc_FP += (nb_pred_doas-nb_gt_doas)
+                            self._FP[class_cnt] += (nb_pred_doas-nb_gt_doas)
+                            self._DE_FP[class_cnt] += (nb_pred_doas-nb_gt_doas)
                         elif nb_pred_doas < nb_gt_doas:
                             # False negative
-                            loc_FN += nb_gt_doas - nb_pred_doas
-                            self._FN[class_cnt] += nb_gt_doas - nb_pred_doas
-                            self._DE_FN[class_cnt] += nb_gt_doas - nb_pred_doas
+                            loc_FN += (nb_gt_doas-nb_pred_doas)
+                            self._FN[class_cnt] += (nb_gt_doas-nb_pred_doas)
+                            self._DE_FN[class_cnt] += (nb_gt_doas-nb_pred_doas)
                 elif class_cnt in gt[block_cnt] and class_cnt not in pred[block_cnt]:
                     # False negative
                     loc_FN += nb_gt_doas
@@ -281,7 +247,6 @@ class SELDMetrics(object):
             self._D += np.maximum(0, loc_FN - loc_FP)
             self._I += np.maximum(0, loc_FP - loc_FN)
         return
-
 
 class OldSELDMetrics(object):
     def __init__(self, nb_frames_1s=None, data_gen=None):
@@ -305,6 +270,7 @@ class OldSELDMetrics(object):
         self._more_est_cnt, self._more_est_frame_cnt = 0, 0
         self._data_gen = data_gen
 
+
     def f1_overall_framewise(self, O, T):
         TP = ((2 * T - O) == 1).sum()
         Nref, Nsys = T.sum(), O.sum()
@@ -322,54 +288,22 @@ class OldSELDMetrics(object):
         self._D += D
         self._I += I
 
-    def f1_overall_1sec(self, O, T):
+    def f1_overall_1sec(self, O, T):        
         new_size = int(np.ceil(float(O.shape[0]) / self._block_size))
         O_block = np.zeros((new_size, O.shape[1]))
         T_block = np.zeros((new_size, O.shape[1]))
         for i in range(0, new_size):
-            O_block[i, :] = np.max(
-                O[
-                    int(i * self._block_size) : int(
-                        i * self._block_size + self._block_size - 1
-                    ),
-                    :,
-                ],
-                axis=0,
-            )
-            T_block[i, :] = np.max(
-                T[
-                    int(i * self._block_size) : int(
-                        i * self._block_size + self._block_size - 1
-                    ),
-                    :,
-                ],
-                axis=0,
-            )
+            O_block[i, :] = np.max(O[int(i * self._block_size):int(i * self._block_size + self._block_size - 1), :], axis=0)
+            T_block[i, :] = np.max(T[int(i * self._block_size):int(i * self._block_size + self._block_size - 1), :], axis=0)
         return self.f1_overall_framewise(O_block, T_block)
 
-    def er_overall_1sec(self, O, T):
+    def er_overall_1sec(self, O, T):        
         new_size = int(np.ceil(float(O.shape[0]) / self._block_size))
         O_block = np.zeros((new_size, O.shape[1]))
         T_block = np.zeros((new_size, O.shape[1]))
         for i in range(0, new_size):
-            O_block[i, :] = np.max(
-                O[
-                    int(i * self._block_size) : int(
-                        i * self._block_size + self._block_size - 1
-                    ),
-                    :,
-                ],
-                axis=0,
-            )
-            T_block[i, :] = np.max(
-                T[
-                    int(i * self._block_size) : int(
-                        i * self._block_size + self._block_size - 1
-                    ),
-                    :,
-                ],
-                axis=0,
-            )
+            O_block[i, :] = np.max(O[int(i * self._block_size):int(i * self._block_size + self._block_size - 1), :], axis=0)
+            T_block[i, :] = np.max(T[int(i * self._block_size):int(i * self._block_size + self._block_size - 1), :], axis=0)
         return self.er_overall_framewise(O_block, T_block)
 
     def update_sed_scores(self, pred, gt):
@@ -394,7 +328,7 @@ class OldSELDMetrics(object):
         return ER, F
 
     def update_doa_scores(self, pred_doa_thresholded, gt_doa):
-        """
+        '''
         Compute DOA metrics when DOA is estimated using classification approach
 
         :param pred_doa_thresholded: predicted results of dimension [nb_frames, nb_classes, nb_azi*nb_ele],
@@ -405,7 +339,7 @@ class OldSELDMetrics(object):
 
         :return: DOA metrics
 
-        """
+        '''
         self._doa_loss_pred_cnt += np.sum(pred_doa_thresholded)
         self._nb_frames += pred_doa_thresholded.shape[0]
 
@@ -418,29 +352,23 @@ class OldSELDMetrics(object):
                 self._nb_good_pks += 1
             elif nb_gt_peaks > nb_pred_peaks:
                 self._less_est_frame_cnt += 1
-                self._less_est_cnt += nb_gt_peaks - nb_pred_peaks
+                self._less_est_cnt += (nb_gt_peaks - nb_pred_peaks)
             elif nb_pred_peaks > nb_gt_peaks:
                 self._more_est_frame_cnt += 1
-                self._more_est_cnt += nb_pred_peaks - nb_gt_peaks
+                self._more_est_cnt += (nb_pred_peaks - nb_gt_peaks)
 
             # when nb_ref_doa > nb_estimated_doa, ignores the extra ref doas and scores only the nearest matching doas
             # similarly, when nb_estimated_doa > nb_ref_doa, ignores the extra estimated doa and scores the remaining matching doas
             if nb_gt_peaks and nb_pred_peaks:
                 pred_ind = np.where(pred_doa_thresholded[frame] == 1)[1]
-                pred_list_rad = (
-                    np.array(self._data_gen.get_matrix_index(pred_ind)) * np.pi / 180
-                )
+                pred_list_rad = np.array(self._data_gen.get_matrix_index(pred_ind)) * np.pi / 180
 
                 gt_ind = np.where(gt_doa[frame] == 1)[1]
-                gt_list_rad = (
-                    np.array(self._data_gen.get_matrix_index(gt_ind)) * np.pi / 180
-                )
+                gt_list_rad = np.array(self._data_gen.get_matrix_index(gt_ind)) * np.pi / 180
 
-                frame_dist = OldSELDMetrics.distance_between_gt_pred(
-                    gt_list_rad.T, pred_list_rad.T
-                )
+                frame_dist = OldSELDMetrics.distance_between_gt_pred(gt_list_rad.T, pred_list_rad.T)
                 self._doa_loss_pred += frame_dist
-
+    
     @classmethod
     def distance_between_gt_pred(cls, gt_list_rad, pred_list_rad):
         """
@@ -457,7 +385,6 @@ class OldSELDMetrics(object):
         :return: less - number of DOA's missed
         :return: extra - number of DOA's over-estimated
         """
-
         def distance_between_spherical_coordinates_rad(az1, ele1, az2, ele2):
             """
             Angular distance between two spherical coordinates
@@ -465,9 +392,7 @@ class OldSELDMetrics(object):
 
             :return: angular distance in degrees
             """
-            dist = np.sin(ele1) * np.sin(ele2) + np.cos(ele1) * np.cos(ele2) * np.cos(
-                np.abs(az1 - az2)
-            )
+            dist = np.sin(ele1) * np.sin(ele2) + np.cos(ele1) * np.cos(ele2) * np.cos(np.abs(az1 - az2))
             # Making sure the dist values are in -1 to 1 range, else np.arccos kills the job
             dist = np.clip(dist, -1, 1)
             dist = np.arccos(dist) * 180 / np.pi
@@ -478,15 +403,9 @@ class OldSELDMetrics(object):
         cost_mat = np.zeros((gt_len, pred_len))
 
         if gt_len and pred_len:
-            az1, ele1, az2, ele2 = (
-                gt_list_rad[ind_pairs[:, 0], 0],
-                gt_list_rad[ind_pairs[:, 0], 1],
-                pred_list_rad[ind_pairs[:, 1], 0],
-                pred_list_rad[ind_pairs[:, 1], 1],
-            )
-            cost_mat[ind_pairs[:, 0], ind_pairs[:, 1]] = (
-                distance_between_spherical_coordinates_rad(az1, ele1, az2, ele2)
-            )
+            az1, ele1, az2, ele2 = gt_list_rad[ind_pairs[:, 0], 0], gt_list_rad[ind_pairs[:, 0], 1], \
+                                pred_list_rad[ind_pairs[:, 1], 0], pred_list_rad[ind_pairs[:, 1], 1]
+            cost_mat[ind_pairs[:, 0], ind_pairs[:, 1]] = distance_between_spherical_coordinates_rad(az1, ele1, az2, ele2)
 
         row_ind, col_ind = linear_sum_assignment(cost_mat)
         cost = cost_mat[row_ind, col_ind].sum()
@@ -516,7 +435,6 @@ class OldSELDMetrics(object):
         self._less_est_cnt, self._less_est_frame_cnt = 0, 0
         self._more_est_cnt, self._more_est_frame_cnt = 0, 0
 
-
 def distance_between_spherical_coordinates_rad(az1, ele1, az2, ele2):
     """
     Angular distance between two spherical coordinates
@@ -524,9 +442,7 @@ def distance_between_spherical_coordinates_rad(az1, ele1, az2, ele2):
 
     :return: angular distance in degrees
     """
-    dist = np.sin(ele1) * np.sin(ele2) + np.cos(ele1) * np.cos(ele2) * np.cos(
-        np.abs(az1 - az2)
-    )
+    dist = np.sin(ele1) * np.sin(ele2) + np.cos(ele1) * np.cos(ele2) * np.cos(np.abs(az1 - az2))
     # Making sure the dist values are in -1 to 1 range, else np.arccos kills the job
     dist = np.clip(dist, -1, 1)
     dist = np.arccos(dist) * 180 / np.pi
@@ -544,10 +460,10 @@ def distance_between_cartesian_coordinates(x1, y1, z1, x2, y2, z2):
     # Normalize the Cartesian vectors
     N1 = np.sqrt(x1**2 + y1**2 + z1**2 + 1e-10)
     N2 = np.sqrt(x2**2 + y2**2 + z2**2 + 1e-10)
-    x1, y1, z1, x2, y2, z2 = x1 / N1, y1 / N1, z1 / N1, x2 / N2, y2 / N2, z2 / N2
+    x1, y1, z1, x2, y2, z2 = x1/N1, y1/N1, z1/N1, x2/N2, y2/N2, z2/N2
 
-    # Compute the distance
-    dist = x1 * x2 + y1 * y2 + z1 * z2
+    #Compute the distance
+    dist = x1*x2 + y1*y2 + z1*z2
     dist = np.clip(dist, -1, 1)
     dist = np.arccos(dist) * 180 / np.pi
     return dist
@@ -555,17 +471,17 @@ def distance_between_cartesian_coordinates(x1, y1, z1, x2, y2, z2):
 
 def least_distance_between_gt_pred(gt_list, pred_list):
     """
-    Shortest distance between two sets of DOA coordinates. Given a set of groundtruth coordinates,
-    and its respective predicted coordinates, we calculate the distance between each of the
-    coordinate pairs resulting in a matrix of distances, where one axis represents the number of groundtruth
-    coordinates and the other the predicted coordinates. The number of estimated peaks need not be the same as in
-    groundtruth, thus the distance matrix is not always a square matrix. We use the hungarian algorithm to find the
-    least cost in this distance matrix.
-    :param gt_list_xyz: list of ground-truth Cartesian or Polar coordinates in Radians
-    :param pred_list_xyz: list of predicted Carteisan or Polar coordinates in Radians
-    :return: cost - distance
-    :return: less - number of DOA's missed
-    :return: extra - number of DOA's over-estimated
+        Shortest distance between two sets of DOA coordinates. Given a set of groundtruth coordinates,
+        and its respective predicted coordinates, we calculate the distance between each of the
+        coordinate pairs resulting in a matrix of distances, where one axis represents the number of groundtruth
+        coordinates and the other the predicted coordinates. The number of estimated peaks need not be the same as in
+        groundtruth, thus the distance matrix is not always a square matrix. We use the hungarian algorithm to find the
+        least cost in this distance matrix.
+        :param gt_list_xyz: list of ground-truth Cartesian or Polar coordinates in Radians
+        :param pred_list_xyz: list of predicted Carteisan or Polar coordinates in Radians
+        :return: cost - distance
+        :return: less - number of DOA's missed
+        :return: extra - number of DOA's over-estimated
     """
 
     gt_len, pred_len = gt_list.shape[0], pred_list.shape[0]
@@ -573,51 +489,36 @@ def least_distance_between_gt_pred(gt_list, pred_list):
     cost_mat = np.zeros((gt_len, pred_len))
 
     if gt_len and pred_len:
-        if len(gt_list[0]) == 3:  # Cartesian
-            x1, y1, z1, x2, y2, z2 = (
-                gt_list[ind_pairs[:, 0], 0],
-                gt_list[ind_pairs[:, 0], 1],
-                gt_list[ind_pairs[:, 0], 2],
-                pred_list[ind_pairs[:, 1], 0],
-                pred_list[ind_pairs[:, 1], 1],
-                pred_list[ind_pairs[:, 1], 2],
-            )
-            cost_mat[ind_pairs[:, 0], ind_pairs[:, 1]] = (
-                distance_between_cartesian_coordinates(x1, y1, z1, x2, y2, z2)
-            )
+        if len(gt_list[0]) == 3: #Cartesian
+            x1, y1, z1, x2, y2, z2 = gt_list[ind_pairs[:, 0], 0], gt_list[ind_pairs[:, 0], 1], gt_list[ind_pairs[:, 0], 2], pred_list[ind_pairs[:, 1], 0], pred_list[ind_pairs[:, 1], 1], pred_list[ind_pairs[:, 1], 2]
+            cost_mat[ind_pairs[:, 0], ind_pairs[:, 1]] = distance_between_cartesian_coordinates(x1, y1, z1, x2, y2, z2)
         else:
-            az1, ele1, az2, ele2 = (
-                gt_list[ind_pairs[:, 0], 0],
-                gt_list[ind_pairs[:, 0], 1],
-                pred_list[ind_pairs[:, 1], 0],
-                pred_list[ind_pairs[:, 1], 1],
-            )
-            cost_mat[ind_pairs[:, 0], ind_pairs[:, 1]] = (
-                distance_between_spherical_coordinates_rad(az1, ele1, az2, ele2)
-            )
+            az1, ele1, az2, ele2 = gt_list[ind_pairs[:, 0], 0], gt_list[ind_pairs[:, 0], 1], pred_list[ind_pairs[:, 1], 0], pred_list[ind_pairs[:, 1], 1]
+            cost_mat[ind_pairs[:, 0], ind_pairs[:, 1]] = distance_between_spherical_coordinates_rad(az1, ele1, az2, ele2)
 
     row_ind, col_ind = linear_sum_assignment(cost_mat)
     cost = cost_mat[row_ind, col_ind]
     return cost, row_ind, col_ind
 
-
+  
 def segment_labels(_pred_dict, _max_frames, nb_frames_1s):
-    """
+    '''
         Collects class-wise sound event location information in segments of length 1s from reference dataset
     :param _pred_dict: Dictionary containing frame-wise sound event time and location information. Output of SELD method
     :param _max_frames: Total number of frames in the recording
     :return: Dictionary containing class-wise sound event location information in each segment of audio
             dictionary_name[segment-index][class-index] = list(frame-cnt-within-segment, azimuth, elevation)
-    """
-    nb_blocks = int(np.ceil(_max_frames / float(nb_frames_1s)))
+    '''
+    nb_blocks = int(np.ceil(_max_frames/float(nb_frames_1s)))
     output_dict = {x: {} for x in range(nb_blocks)}
     for frame_cnt in range(0, _max_frames, nb_frames_1s):
+
         # Collect class-wise information for each block
         # [class][frame] = <list of doa values>
         # Data structure supports multi-instance occurence of same class
         block_cnt = frame_cnt // nb_frames_1s
         loc_dict = {}
-        for audio_frame in range(frame_cnt, frame_cnt + nb_frames_1s):
+        for audio_frame in range(frame_cnt, frame_cnt+nb_frames_1s):
             if audio_frame not in _pred_dict:
                 continue
             for value in _pred_dict[audio_frame]:
@@ -661,16 +562,16 @@ def match_event_roll_lengths_doa(event_roll_a, event_roll_b, length=None):
     event_roll_b: np.ndarray
         Padded/Cropped event roll B
     """
-
+    
     def pad_event_roll(event_roll, target_length):
         current_length = event_roll.shape[0]
         if target_length > current_length:
             padding_length = target_length - current_length
-
+            
             # construct shape to support both 2D (SED) and 3D (DOA)
             pad_shape = list(event_roll.shape)
             pad_shape[0] = padding_length
-
+            
             padding = np.zeros(tuple(pad_shape))
             event_roll = np.vstack((event_roll, padding))
         return event_roll
@@ -700,10 +601,10 @@ def cart2sph(x, y, z):
     Convert Cartesian coordinates to spherical coordinates.
     Returns: azimuth, elevation, radius
     """
-    XsqPlusYsq = x**2 + y**2
-    r = np.sqrt(XsqPlusYsq + z**2)  # r
-    elev = np.arctan2(z, np.sqrt(XsqPlusYsq))  # theta (elevation)
-    az = np.arctan2(y, x)  # phi (azimuth)
+    XsqPlusYsq = x ** 2 + y ** 2
+    r = np.sqrt(XsqPlusYsq + z ** 2)               # r
+    elev = np.arctan2(z, np.sqrt(XsqPlusYsq))      # theta (elevation)
+    az = np.arctan2(y, x)                          # phi (azimuth)
     return az, elev, r
 
 
@@ -866,7 +767,6 @@ class Top1Accuracy(ScoreFunction):
 
         return correct / len(targets)
 
-
 class ChromaAccuracy(ScoreFunction):
     """
     Score specifically for pitch detection -- converts all pitches to chroma first.
@@ -935,8 +835,8 @@ class SoundEventScore(ScoreFunction):
         )
 
         for filename in predictions:
-            # We need to understand here.
-            # It calculates the scores per filename. This is obvious.
+            #We need to understand here.
+            #It calculates the scores per filename. This is obvious.
             scores.evaluate(
                 reference_event_list=reference_event_list.filter(filename=filename),
                 estimated_event_list=estimated_event_list.filter(filename=filename),
@@ -974,7 +874,7 @@ class SoundEventScore(ScoreFunction):
                         "file": filename,
                     }
                 )
-        return MetaDataContainer(reference_events)
+        return  MetaDataContainer(reference_events)
 
 
 class OldSELD(ScoreFunction):
@@ -982,12 +882,13 @@ class OldSELD(ScoreFunction):
         self,
         label_to_idx: Dict[str, int],
         scores: Tuple[str],
-        azimuth_list: Tuple[int, int],
-        elevation_list: Tuple[int, int],
-        _doa_resolution: int,
+        azimuth_list : Tuple[int, int], 
+        elevation_list : Tuple[int, int],
+        _doa_resolution: int, 
         name: Optional[str] = None,
-        maximize: bool = True,
+        maximize: bool = True
     ):
+        
         super().__init__(label_to_idx=label_to_idx, name=name, maximize=maximize)
         self.scores = scores
         self.params = {}
@@ -995,15 +896,14 @@ class OldSELD(ScoreFunction):
         self._ele_list = range(elevation_list[0], elevation_list[1], _doa_resolution)
         self._height = len(self._ele_list)
 
-    def _compute(
-        self,
+    def _compute(self,
         pred_dicts,
         ref_dicts,
         _nb_label_frames_1s,
         _nb_pred_frames_1s,
         _max_frames,
-        _max_ref_frames,
-    ) -> Tuple[Tuple[str, float], ...]:
+        _max_ref_frames) -> Tuple[Tuple[str, float], ...]:
+        
         overall_scores = {}
         eval = OldSELDMetrics(nb_frames_1s=_nb_label_frames_1s, data_gen=self)
         eval.reset()
@@ -1013,18 +913,14 @@ class OldSELD(ScoreFunction):
             _max_frame = _max_frames[file_name]
             _max_ref_frames = _max_ref_frames[file_name]
 
-            # Our prediction dict is in cartesian format, so convert it to polar!
+            #Our prediction dict is in cartesian format, so convert it to polar!
             pred_dict = convert_output_format_cartesian_to_polar(pred_dict)
             pred_dict = convert_output_format_new_to_old(pred_dict)
             ref_dict = convert_output_format_new_to_old(ref_dict)
 
-            # Convert from regression to classification for DOA, the max_frames is indeed the same as prediction labels.
-            gt_labels = self.output_format_dict_to_classification_labels(
-                ref_dict, _max_ref_frames
-            )
-            pred_labels = self.output_format_dict_to_classification_labels(
-                pred_dict, _max_frames
-            )
+            #Convert from regression to classification for DOA, the max_frames is indeed the same as prediction labels.
+            gt_labels = self.output_format_dict_to_classification_labels(ref_dict, _max_ref_frames)
+            pred_labels = self.output_format_dict_to_classification_labels(pred_dict, _max_frames)
             # Calculated SED and DOA scores
 
             eval.update_sed_scores(pred_labels.max(2), gt_labels.max(2))
@@ -1036,37 +932,29 @@ class OldSELD(ScoreFunction):
         seld_scr = compute_seld_metric([ER, F], [LE, LR])
 
         overall_scores["ER"] = ER
-        overall_scores["F"] = F
+        overall_scores["F"] = F 
         overall_scores["LE"] = LE
-        overall_scores["LR"] = LR
+        overall_scores["LR"] = LR 
         overall_scores["SELD"] = seld_scr
 
         return tuple([(score, float(overall_scores[score])) for score in self.scores])
 
+
     def output_format_dict_to_classification_labels(self, _output_dict, max_frames):
+
         _nb_classes = len(self.label_to_idx)
-        _labels = np.zeros(
-            (max_frames, _nb_classes, len(self._azi_list) * len(self._ele_list))
-        )
+        _labels = np.zeros((max_frames, _nb_classes, len(self._azi_list) * len(self._ele_list)))
 
         for _frame_cnt in _output_dict.keys():
             for _tmp_doa in _output_dict[_frame_cnt]:
                 # Making sure the doa's are within the limits
-                _tmp_doa[1] = np.clip(
-                    _tmp_doa[1], self._azi_list[0], self._azi_list[-1]
-                )
-                _tmp_doa[2] = np.clip(
-                    _tmp_doa[2], self._ele_list[0], self._ele_list[-1]
-                )
+                _tmp_doa[1] = np.clip(_tmp_doa[1], self._azi_list[0], self._azi_list[-1])
+                _tmp_doa[2] = np.clip(_tmp_doa[2], self._ele_list[0], self._ele_list[-1])
                 # create label
-                _labels[
-                    _frame_cnt,
-                    _tmp_doa[0],
-                    int(self.get_list_index(_tmp_doa[1], _tmp_doa[2])),
-                ] = 1
+                _labels[_frame_cnt, _tmp_doa[0], int(self.get_list_index(_tmp_doa[1], _tmp_doa[2]))] = 1
 
         return _labels
-
+     
     def get_list_index(self, azi, ele):
         azi = (azi - self._azi_list[0]) // 10
         ele = (ele - self._ele_list[0]) // 10
@@ -1074,8 +962,8 @@ class OldSELD(ScoreFunction):
 
     def get_matrix_index(self, ind):
         azi, ele = ind // self._height, ind % self._height
-        azi = azi * 10 + self._azi_list[0]
-        ele = ele * 10 + self._ele_list[0]
+        azi = (azi * 10 + self._azi_list[0])
+        ele = (ele * 10 + self._ele_list[0])
         return azi, ele
 
 
@@ -1083,71 +971,58 @@ class SELD(ScoreFunction):
     def __init__(
         self,
         label_to_idx: Dict[str, int],
-        doa_threshold: float,
-        average: str,
+        doa_threshold:float,
+        average:str,
         scores: Tuple[str],
         name: Optional[str] = None,
         maximize: bool = True,
     ):
+        
         super().__init__(label_to_idx=label_to_idx, name=name, maximize=maximize)
         self.scores = scores
         self.params = {}
         self.doa_threshold = doa_threshold
-        self.average = average
+        self.average=average
         self.nb_classes = len(self.label_to_idx)
 
-    # MAX FRAMES passed here, but not used. It is for the completeness of the whole class.
-    # max_frames refer to the maximum number of frames in the dataset.
-    def _compute(
-        self,
+    #MAX FRAMES passed here, but not used. It is for the completeness of the whole class.
+    #max_frames refer to the maximum number of frames in the dataset.
+    def _compute(self,
         pred_dicts,
         ref_dicts,
         _nb_label_frames_1s,
         _nb_pred_frames_1s,
         _max_frames,
-        _max_ref_frames,
-    ) -> Tuple[Tuple[str, float], ...]:
+        _max_ref_frames) -> Tuple[Tuple[str, float], ...]:
+        
         overall_scores = {}
 
-        eval = SELDMetrics(
-            nb_classes=self.nb_classes,
-            doa_threshold=self.doa_threshold,
-            average=self.average,
-        )
+        eval = SELDMetrics(nb_classes=self.nb_classes, doa_threshold=self.doa_threshold, average=self.average)
         for file_name in pred_dicts.keys():
             pred_dict = pred_dicts[file_name]
             ref_dict = ref_dicts[file_name]
             _max_frame = _max_frames[file_name]
             _max_ref_frame = _max_ref_frames[file_name]
-            # Our prediction dict is in cartesian format, so convert it to polar!
+            #Our prediction dict is in cartesian format, so convert it to polar!
             pred_dict = convert_output_format_cartesian_to_polar(pred_dict)
             if _nb_label_frames_1s == _nb_pred_frames_1s:
                 max_frames = max(list(pred_dict.keys()))
-                pred_labels = segment_labels(
-                    pred_dict, max_frames, nb_frames_1s=_nb_label_frames_1s
-                )
-                ref_labels = segment_labels(
-                    ref_dict, max_frames, nb_frames_1s=_nb_label_frames_1s
-                )
+                pred_labels = segment_labels(pred_dict, max_frames, nb_frames_1s=_nb_label_frames_1s)
+                ref_labels = segment_labels(ref_dict, max_frames, nb_frames_1s=_nb_label_frames_1s)
             else:
-                pred_labels = segment_labels(
-                    pred_dict, _max_frames, nb_frames_1s=_nb_pred_frames_1s
-                )
-                ref_labels = segment_labels(
-                    ref_dict, _max_ref_frames, nb_frames_1s=_nb_label_frames_1s
-                )
+                pred_labels = segment_labels(pred_dict, _max_frames, nb_frames_1s=_nb_pred_frames_1s)
+                ref_labels = segment_labels(ref_dict, _max_ref_frames, nb_frames_1s=_nb_label_frames_1s)
             eval.update_seld_scores(pred_labels, ref_labels)
 
         # Overall SED and DOA scores
         ER, F, LE, LR, seld_scr, classwise_results = eval.compute_seld_scores()
         overall_scores["ER"] = ER
-        overall_scores["F"] = F
+        overall_scores["F"] = F 
         overall_scores["LE"] = LE
-        overall_scores["LR"] = LR
+        overall_scores["LR"] = LR 
         overall_scores["SELD"] = seld_scr
 
         return tuple([(score, float(overall_scores[score])) for score in self.scores])
-
 
 class SegmentBasedScore(SoundEventScore):
     """
@@ -1464,7 +1339,6 @@ available_scores: Dict[str, Callable] = {
     "event_onset_200ms_fms": partial(
         EventBasedScore,
         name="event_onset_200ms_fms",
-        # If first score will be used as the primary score for this metric
         scores=("f_measure", "precision", "recall"),
         params={"evaluate_onset": True, "evaluate_offset": False, "t_collar": 0.2},
     ),
@@ -1488,11 +1362,11 @@ available_scores: Dict[str, Callable] = {
     "segment_1s_er": partial(
         SegmentBasedScore,
         name="segment_1s_er",
-        scores=("error_rate", ""),
+        scores=["error_rate"],
         params={"time_resolution": 1.0},
         maximize=False,
     ),
-    "SELD": partial(
+    'SELD': partial(
         SELD,
         name="SELD",
         scores=("SELD", "ER", "F", "LE", "LR"),
