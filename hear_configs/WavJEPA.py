@@ -2,7 +2,10 @@ import torch
 
 from hear_api.runtime import RuntimeJEPA
 from wavjepa.extractors import ConvFeatureExtractor
+import sys 
+import wavjepa 
 
+sys.modules['sjepa'] = wavjepa
 
 def load_model(*args, **kwargs):
     weights = None

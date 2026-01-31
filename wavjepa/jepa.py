@@ -390,15 +390,17 @@ class JEPA(pl.LightningModule):
             for i in range(batch_size):
                 # get the noise length.
                 valid_len = min(noise_lengths[i].item(), noise.shape[-1])
+
                 current_noise = noise[i, :valid_len]
 
                 # Normalize before fading and fade.
                 current_noise = normalize_audio(current_noise)
                 current_noise = generate_scenes.fade_noise(
-                    current_noise, final_audio[i], ORIGINAL_SR
+                    noise_lengths[i].item(), current_noise, final_audio[i], ORIGINAL_SR
                 )
-
-                # SNR ensures that there is no noise added where noise is not present.
+                
+                #If target audio length is bigger than the valid length
+                #Place the noise randomly.
                 if self.target_audio_length > valid_len:
                     start_idx = torch.randint(
                         0, self.target_audio_length - valid_len, (1,)
@@ -407,7 +409,7 @@ class JEPA(pl.LightningModule):
                     placed_noise_batch[i, start_idx : start_idx + valid_len] = (
                         current_noise
                     )
-                else:
+                else: 
                     placed_noise_batch[i] = current_noise[: self.target_audio_length]
         
         # Generate a naturalistic scene
