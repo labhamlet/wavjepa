@@ -311,6 +311,9 @@ class WebAudioDataModule(pl.LightningDataModule):
             # Raw noise can be longer or shorter than 10 seconds, and it is always 32kHz.
             raw_noise = next(self.noise_loader)
             noise_length = max(raw_noise.shape)
+
+            #Here we randomly select a 10 second noise, or pad it to 10 seconds. 
+            #We keep the noise length later to know if we need to fade in and out.
             noise = pad_or_randomly_select(raw_noise, self.noise_target_length)
             snr = (
                 torch.distributions.uniform.Uniform(self.snr_low, self.snr_high)

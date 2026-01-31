@@ -388,13 +388,17 @@ class JEPA(pl.LightningModule):
             # This is the real length of the noise actually.
             placed_noise_batch = torch.zeros_like(final_audio)
             for i in range(batch_size):
-                # get the noise length.
+                #Did we pad the noise?
                 valid_len = min(noise_lengths[i].item(), noise.shape[-1])
-
                 current_noise = noise[i, :valid_len]
 
-                # Normalize before fading and fade.
+                #Normalize only the non-faded part.
                 current_noise = normalize_audio(current_noise)
+                #Fade in and out the noise.
+                #If the real length was longer than the audio 
+                #we apply both fade-in and fade-out
+                #Else
+                #we apply fade-out only.
                 current_noise = generate_scenes.fade_noise(
                     noise_lengths[i].item(), current_noise, final_audio[i], ORIGINAL_SR
                 )

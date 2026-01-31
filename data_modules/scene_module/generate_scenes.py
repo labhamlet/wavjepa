@@ -225,11 +225,9 @@ def fade_noise(noise_real_length: int, noise_source: torch.Tensor, audio_source:
         # If audio is longer than the noise, just cut the noise to the audio length
         # Because we cut the noise like that, apply a fadeout!
         noise_source = noise_source[: audio_source.shape[-1]]
-        print("Fade out")
         noise_source = apply_fadeout(noise_source, sr=sr, duration=0.2)
     # Otherwise apply fade-in and fade-out
     else:
-        print("Fade in and out")
         noise_source = apply_fadein(noise_source, sr=sr, duration=0.2)
         noise_source = apply_fadeout(noise_source, sr=sr, duration=0.2)
     return noise_source
