@@ -436,7 +436,7 @@ class JEPA(pl.LightningModule):
         #In the beggining of training this is high, we learn the audio.
         #As the training progresses, increase this to make the student learn to denoise,
         current_step_ratio = self.get_aug_prob()
-
+        print(f"current clean ratio is: {current_step_ratio}")
         if torch.rand(1).item() < current_step_ratio:
             generated_scene = clean_scene.clone()
 
