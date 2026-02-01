@@ -171,7 +171,7 @@ def setup_callbacks(cfg):
         dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
-        every_n_train_steps=2500,
+        every_n_train_steps=1000,
         save_last=True,
         enable_version_counter=True,
         save_top_k=-1,

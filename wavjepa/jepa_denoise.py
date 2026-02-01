@@ -173,7 +173,7 @@ class DenoiseJEPA(pl.LightningModule):
 
         self.apply(self._init_weights)
         self._init_teacher()
-        if False:
+        if compile_modules:
             self._compile_operations()
             self.pad_or_truncate_batch = torch.compile(pad_or_truncate_batch)
             self.collate_fn = torch.compile(collate_fn)
