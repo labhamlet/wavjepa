@@ -103,6 +103,7 @@ class DenoiseJEPA(pl.LightningModule):
         adam_eps: float = 1e-06,
         adam_weight_decay: float = 0.01,
         average_top_k_layers: int = 12,
+        ema : float = 0.99999,
         resample_sr : int = 16000,
         process_audio_seconds: float = 2.00,
         in_channels : int = 2,
@@ -239,6 +240,12 @@ class DenoiseJEPA(pl.LightningModule):
     def _init_teacher(self):
         self.teacher_encoder = copy.deepcopy(self.encoder)
         self.teacher_encoder.requires_grad_(False)
+
+    @torch.no_grad()
+    def _step_teacher(self):
+        r = self.hparams.ema
+        for student, teacher in zip(self.encoder.parameters(), self.teacher_encoder.parameters()):
+            teacher.data.mul_(r).add_((1 - r) * student.detach().data)
 
     def _compile_operations(self):
         """
@@ -475,10 +482,12 @@ class DenoiseJEPA(pl.LightningModule):
         # Enhanced logging
         log_data = {
             "train/loss": out['loss'],
-            # "ema" : self._get_ema_decay(),
+            "ema" : self.ema,
         }
             
         self.log_dict(log_data, prog_bar=True, sync_dist=True)
+        with torch.amp.autocast('cuda', enabled=False):  # Force FP32 computation for stability
+            self._step_teacher()
         
         return out
 
