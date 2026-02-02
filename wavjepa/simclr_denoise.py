@@ -40,7 +40,7 @@ def resample(audio: torch.Tensor, resample_sr: int, original_sr = 32000) -> torc
     )
 
 
-class DenoiseJEPA(pl.LightningModule):
+class SimCLRDenoise(pl.LightningModule):
     """
     Joint-Embedding Predictive Architecture (JEPA).
 
@@ -103,7 +103,6 @@ class DenoiseJEPA(pl.LightningModule):
         adam_eps: float = 1e-06,
         adam_weight_decay: float = 0.01,
         average_top_k_layers: int = 12,
-        ema : float = 0.99999,
         resample_sr : int = 16000,
         process_audio_seconds: float = 2.00,
         in_channels : int = 2,
@@ -173,8 +172,7 @@ class DenoiseJEPA(pl.LightningModule):
         self.pos_encoding_decoder = self._get_pos_embed_params(self.decoder_embedding_dim)
 
         self.apply(self._init_weights)
-        self._init_teacher()
-        if compile_modules:
+        if False:
             self._compile_operations()
             self.pad_or_truncate_batch = torch.compile(pad_or_truncate_batch)
             self.collate_fn = torch.compile(collate_fn)
@@ -196,6 +194,10 @@ class DenoiseJEPA(pl.LightningModule):
             trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+
+    def _init_teacher(self):
+        self.teacher_encoder = copy.deepcopy(self.encoder)
+        self.teacher_encoder.requires_grad_(False)
 
     def _get_pos_embed_params(self, embedding_dim):
         """Calculates the pos embedding embedding parameters and returns them."""
@@ -237,15 +239,6 @@ class DenoiseJEPA(pl.LightningModule):
         pos_embed.data.copy_(torch.from_numpy(pos_embed_data).float().unsqueeze(0))
         return pos_embed
 
-    def _init_teacher(self):
-        self.teacher_encoder = copy.deepcopy(self.encoder)
-        self.teacher_encoder.requires_grad_(False)
-
-    @torch.no_grad()
-    def _step_teacher(self):
-        r = self.hparams.ema
-        for student, teacher in zip(self.encoder.parameters(), self.teacher_encoder.parameters()):
-            teacher.data.mul_(r).add_((1 - r) * student.detach().data)
 
     def _compile_operations(self):
         """
@@ -277,50 +270,6 @@ class DenoiseJEPA(pl.LightningModule):
         return {"optimizer": optimizer,
                 'lr_scheduler' : {"scheduler": cosine_annealing, "interval": "step"}}
 
-    def _make_targets(self, layer_outputs : List[torch.Tensor]):
-        """
-        Predicting targets which are the average of multiple layers is more robust than 
-        predicting only the top most layer (K = 1) for most modalities.
-        Args:
-            layer_outputs: average_top_k_layers * (batch_size, n_patches, emb_dim)
-
-        Returns:
-            array of shape (batch_size, n_patches, emb_dim)
-        """
-
-        # They have for audioset -> instance_norm_target_layer: true
-        # They have for audioset -> layer_norm_targets : true
-        # So this is the way following the data2vec2 paper for audio.
-        stacked_outputs = torch.stack(layer_outputs, )  # [num_layers, batch, seq_len, features]
-        transposed = stacked_outputs.transpose(2, 3)   # [num_layers, batch, features, seq_len]
-
-        # Apply instance norm to all layers simultaneously
-        normalized = F.instance_norm(transposed)       # [num_layers, batch, features, seq_len]
-        normalized = normalized.transpose(2, 3)        # [num_layers, batch, seq_len, features]
-
-        # Compute mean across layers
-        y = normalized.mean(dim=0)                     # [batch, seq_len, features]
-        return y
-
-    @torch.no_grad()
-    def _forward_teacher(self, x : torch.Tensor) -> torch.Tensor:
-        layer_outputs = []
-        for i, bl in enumerate(self.teacher_encoder.layers): # type: ignore
-            x : torch.Tensor = bl(x)
-            if (
-                len(self.teacher_encoder.layers) - i
-                <= self.hparams.average_top_k_layers
-            ):
-                layer_outputs.append(x)
-
-        if self.hparams.average_top_k_layers > 1:
-            targets = self._make_targets(layer_outputs)  # (batch_size, n_patches, emb_dim)
-        else:
-            targets = layer_outputs[-1]
-        return targets
-
-    def get_aug_prob(self):
-        return 1 - (self.global_step / self.trainer.max_steps)
 
     def on_after_batch_transfer(self, batch, dataloader_idx):
         """
@@ -482,44 +431,12 @@ class DenoiseJEPA(pl.LightningModule):
         # Enhanced logging
         log_data = {
             "train/loss": out['loss'],
-            "ema" : self.hparams.ema,
         }
             
         self.log_dict(log_data, prog_bar=True, sync_dist=True)
-        with torch.amp.autocast('cuda', enabled=False):  # Force FP32 computation for stability
-            self._step_teacher()
         
         return out
 
-    def masked_loss(self, pred, target, target_indices):
-        """
-        Calculates the masked loss using broadcasting to avoid memory-heavy repeats.
-
-        pred:   Tensor of shape [(B * N), T, D]
-        target: Tensor of shape [B, T, D]
-        mask:   Tensor of shape [B, N, T]
-        """
-        B, N, _ = target_indices.shape
-        D = pred.shape[-1]
-
-        pred_reshaped = pred.view(B, N, -1, D)
-
-        # This makes it broadcastable to the shape of pred_reshaped [B, N, T, D] during the loss
-        
-        target = repeat(target, "B T D -> B N T D", N = N)
-        loss = self.loss_fn(pred_reshaped, target)  # -> Shape: [B, N, T, D]
-
-        loss_per_timestep = loss.mean(dim=-1)  # -> Shape: [B, N, T]
-
-        # No rearrange is needed for the mask.
-        masked_loss_tensor = loss_per_timestep * target_indices  # -> Shape: [B, N, T]
-
-        # Calculate the final mean loss over only the masked elements.
-        total_loss = masked_loss_tensor.sum()
-        indices_count = target_indices.sum()
-
-        return total_loss / (indices_count + 1e-8)
-    
 
     def forward(self, generated_scene: torch.Tensor, clean_scene : torch.Tensor, ctx_masks, target_indices, ctx_and_target_masks) -> ForwardReturn:
         """
@@ -554,53 +471,32 @@ class DenoiseJEPA(pl.LightningModule):
         
         local_features_generated = local_features_generated + self.pos_encoding_encoder
 
-        contextual_features = self.encoder_forward(local_features_generated, src_key_padding_mask=ctx_masks)
-        # Accumulate contextual features on the batch dimensions
-        contextual_features = contextual_features[~ctx_masks]
-        contextual_features = self.encoder_to_decoder_mapper(contextual_features)
-        
-        preds = self.decoder_forward(contextual_features, ctx_masks, nr_targets = target_indices.shape[1], src_key_padding_mask=ctx_and_target_masks)
-        
+        contextual_features_generated = self.encoder_forward(local_features_generated, src_key_padding_mask=None)
+
+
         # Compute the training targets using the teacher.
         local_features_clean = self.extract_audio(clean_scene)
         local_features_clean = self.feature_norms(local_features_clean)
         if self.post_extraction_mapper is not None:
             local_features_clean = self.post_extraction_mapper(local_features_clean)
         
+        contextual_features_clean = self.encoder_forward(local_features_clean, src_key_padding_mask=None)
+
         local_features_clean = local_features_clean + self.pos_encoding_encoder
         local_features_clean = local_features_clean.detach()
-        targets = self._forward_teacher(local_features_clean)
+        targets = self._teacher_forward(local_features_clean, src_key_padding_mask=None)
 
-        loss = self.masked_loss(preds, targets, target_indices)
+        loss_clean_clean = torch.nn.functional.mse_loss(contextual_features_clean, targets)
+        loss_clean_noisy = torch.nn.functional.mse_loss(contextual_features_generated, targets)
         
+        loss = loss_clean_clean + 0.1 * loss_clean_noisy
         return ForwardReturn(
             local_features_clean=local_features_clean,
             local_features_generated=local_features_generated,
-            contextual_features=contextual_features,
             loss=loss,
-            preds=preds,
             targets=targets,
         )
 
-
-    def decoder_forward(self, contextual_features: torch.Tensor, ctx_mask: torch.BoolTensor, nr_targets : int, src_key_padding_mask : Optional[torch.BoolTensor] = None) -> torch.Tensor:
-        B = ctx_mask.shape[0]
-        # Prepare the mask tokens.
-        tgt = self.mask_token.repeat(B, self.total_patches, 1).type_as(contextual_features) # (B, seq_len, decoder_dim)
-        tgt[~ctx_mask, :] = contextual_features.reshape((-1, self.decoder_embedding_dim))
-        tgt = tgt.reshape((B, -1, self.decoder_embedding_dim))
-        # Add positional encoding to the decoder
-        tgt = tgt + self.pos_encoding_decoder
-
-        # Repeat the context for every target, and absorb into batch dimension
-        tgt = repeat(tgt, 'B Seq Emb -> B T Seq Emb', T = nr_targets)
-        tgt = rearrange(tgt, 'B T Seq Emb -> (B T) Seq Emb')
-        src_key_padding_mask = rearrange(src_key_padding_mask, 'B T Seq1 -> (B T) Seq1')
-        
-        #Decoder only attends to context tokens and target mask tokens.
-        tgt = self.decoder(tgt, src_key_padding_mask = src_key_padding_mask)
-        preds = self.decoder_to_encoder_mapper(tgt)
-        return preds
 
 
     #TODO use flex attention
@@ -616,6 +512,18 @@ class DenoiseJEPA(pl.LightningModule):
 
         return contextual_features
 
+    #TODO use flex attention
+    def _teacher_forward(self, 
+    x_contexts: torch.Tensor, 
+    src_key_padding_mask : Optional[torch.BoolTensor] = None
+    ) -> torch.Tensor:
+
+        if self.use_gradient_checkpointing and self.training:
+            contextual_features = checkpoint(self.encoder, x_contexts, use_reentrant=False)
+        else:
+            contextual_features = self.teacher_encoder(x_contexts, src_key_padding_mask = src_key_padding_mask)
+
+        return contextual_features
     @torch.inference_mode()
     def get_audio_representation(self, audio : torch.Tensor, padding_mask : torch.tensor):
         # Get the audio representatin of waveform x.

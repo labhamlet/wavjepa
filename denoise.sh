@@ -15,4 +15,4 @@ module load Anaconda3/2023.07-2
 source activate sjape
 
 
-python3 denoise.py data=audioset extractor=ConvFeatureExtractor trainer=denoise trainer.batch_size=32 trainer.num_gpus=2
+python3 denoise.py data=audioset model=SimCLR extractor=ConvFeatureExtractor trainer=denoise trainer.batch_size=1 trainer.num_gpus=1
