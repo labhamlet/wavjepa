@@ -131,9 +131,6 @@ def generate_scene(source_rir, source, noise, snr):
         # Add channel dim
         assert source.ndim == 2
         assert noise.ndim == 2
-
-        if snr.ndim != 2:
-            snr = snr.unsqueeze(1)
         return F.add_noise(source, noise, snr)
 
     # Case 4: Neither source RIR nor noise exists, return one channel audio

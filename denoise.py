@@ -160,7 +160,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa_denoised/",
+        f"{cfg.save_dir}/tb_logs_jepa_denoised_conv_05/",
         name=identity.replace("_", "/"),
     )
 
@@ -170,10 +170,10 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised_conv_05/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
-        every_n_train_steps=1000,
+        every_n_train_steps=2500,
         save_last=True,
         enable_version_counter=True,
         save_top_k=-1,
@@ -202,7 +202,7 @@ def setup_trainer(cfg, logger, callbacks) -> pl.Trainer:
         devices=num_gpus,
         gradient_clip_val=5,
         gradient_clip_algorithm = "norm",
-        strategy="ddp" if num_gpus > 1 else "auto",
+        strategy='ddp_find_unused_parameters_true' if num_gpus > 1 else "auto",
     )
 
 

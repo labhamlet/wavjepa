@@ -175,7 +175,7 @@ class SimCLRDenoise(pl.LightningModule):
         self.pos_encoding_decoder = self._get_pos_embed_params(self.decoder_embedding_dim)
 
         self.apply(self._init_weights)
-        if False:
+        if compile_modules:
             self._compile_operations()
             self.pad_or_truncate_batch = torch.compile(pad_or_truncate_batch)
             self.collate_fn = torch.compile(collate_fn)
@@ -467,6 +467,8 @@ class SimCLRDenoise(pl.LightningModule):
         # Enhanced logging
         log_data = {
             "train/loss": out['loss'],
+            "loss_denoise": out["loss_denoise"],
+            "loss_clean": out["loss_clean"]
         }
             
         self.log_dict(log_data, prog_bar=True, sync_dist=True)
@@ -519,6 +521,7 @@ class SimCLRDenoise(pl.LightningModule):
 
         #Clean audio WavJEPA-Clean produces this!
         with torch.no_grad(): 
+            self.teacher.eval() 
             clean_targets = self.teacher.get_audio_representation(clean_scene, padding_mask=None)
             clean_targets = clean_targets.clone()
 
@@ -526,14 +529,19 @@ class SimCLRDenoise(pl.LightningModule):
         #Get the loss between clean-noisy 
 
         #Test if we can copy the teacher perfectly. Trivial!
-        loss_teacher_clean_student_clean = torch.nn.functional.mse_loss(contextual_features_clean, clean_targets)
-        loss_teacher_clean_student_noisy = torch.nn.functional.mse_loss(contextual_features_generated, clean_targets)
-        
-        loss = loss_teacher_clean_student_clean + loss_teacher_clean_student_noisy
+        # loss_clean = torch.nn.functional.mse_loss(contextual_features_clean, clean_targets)
+        # loss_denoise = torch.nn.functional.mse_loss(contextual_features_generated, clean_targets)
+
+        loss_clean = -F.cosine_similarity(contextual_features_clean.flatten(0,1), clean_targets.flatten(0,1), dim=-1).mean()
+        loss_denoise = -F.cosine_similarity(contextual_features_generated.flatten(0,1), clean_targets.flatten(0,1), dim=-1).mean()
+        alpha = 0.4
+        loss = (1 - alpha) * loss_clean + alpha * loss_denoise
         return ForwardReturn(
             local_features_clean=local_features_clean,
             local_features_generated=local_features_generated,
             loss=loss,
+            loss_denoise=loss_denoise,
+            loss_clean=loss_clean
         )
 
 

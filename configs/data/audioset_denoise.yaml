@@ -10,5 +10,5 @@ clean_data_ratio : 0.0
 with_noise : True
 with_rir : True
 snr_low : -5
-snr_high : 40
+snr_high : 5
 name : NaturalisticAudioSet
