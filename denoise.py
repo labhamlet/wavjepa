@@ -12,6 +12,8 @@ from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
 from wavjepa.jepa_denoise import DenoiseJEPA
+from wavjepa.simclr_denoise import SimCLRDenoise
+
 from wavjepa.masking import RandomClusterMaskMaker, RandomMaskMaker, TimeInverseBlockMasker, MultiBlockMaskMaker
 from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
@@ -22,7 +24,7 @@ sys.modules['sjepa'] = wavjepa
 ORIGINAL_SR = 32000
 
 # Component registries
-NETWORKS = {"JEPA": DenoiseJEPA}
+NETWORKS = {"JEPA": DenoiseJEPA, 'SimCLR': SimCLRDenoise}
 MASKERS = {"random-masker": RandomMaskMaker, 'random-cluster-masker': RandomClusterMaskMaker, 'time-inverse-masker' : TimeInverseBlockMasker, 'multi-block-masker': MultiBlockMaskMaker}
 EXTRACTORS = {"spatial-conv-extractor": ConvFeatureExtractor, 
               "conv-extractor": ConvFeatureExtractor}
@@ -286,7 +288,9 @@ def main(cfg):
                 new_state_dict[key] = value
 
         model.load_state_dict(new_state_dict, strict=False)
-        
+        if cfg.model != "JEPA":
+            model._init_teacher()
+
         # Start training
         trainer.fit(model, data_module, ckpt_path=None)
         
