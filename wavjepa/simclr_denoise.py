@@ -18,6 +18,9 @@ from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_p
 from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
+from wavjepa.jepa import JEPA 
+from wavjepa.extractors import ConvFeatureExtractor
+
 from data_modules.scene_module import generate_scenes_batch, generate_scenes
 from data_modules.dataset_functions import pad_or_truncate_batch, normalize_audio_batch, normalize_audio
 
@@ -88,7 +91,6 @@ class SimCLRDenoise(pl.LightningModule):
             use for the average.
     """
     TARGET_SECONDS: int = 10
-    teacher_encoder: nn.Module
     def __init__(
         self,
         feature_extractor: Extractor,
@@ -127,6 +129,7 @@ class SimCLRDenoise(pl.LightningModule):
         self.clean_data_ratio = clean_data_ratio
 
         self.sr = resample_sr 
+        self.process_audio_seconds = process_audio_seconds
         self.is_spectrogram = is_spectrogram
         self.nr_samples_per_audio = nr_samples_per_audio
         self.target_length = int(resample_sr * process_audio_seconds)
@@ -195,9 +198,42 @@ class SimCLRDenoise(pl.LightningModule):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def _init_teacher(self):
-        self.teacher_encoder = copy.deepcopy(self.encoder)
-        self.teacher_encoder.requires_grad_(False)
+    def _set_teacher(self, weights_ckpt): 
+        weights = torch.load(weights_ckpt, weights_only=False)
+        new_state_dict = {}
+        for key, value in weights["state_dict"].items():
+            if key.startswith("extract_audio._orig_mod"):
+                new_key = key.replace("extract_audio._orig_mod", "extract_audio")
+                new_state_dict[new_key] = value
+            elif key.startswith("encoder._orig_mod"):
+                new_key = key.replace("encoder._orig_mod", "encoder")
+                new_state_dict[new_key] = value
+            elif key.startswith("decoder._orig_mod"):
+                new_key = key.replace("decoder._orig_mod", "decoder")
+                new_state_dict[new_key] = value
+            else:
+                new_state_dict[key] = value
+
+        extractor = ConvFeatureExtractor(
+            conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)]"),
+            in_channels=1,
+        )
+        model = JEPA(
+            feature_extractor=extractor,
+            transformer_encoder_cfg=TransformerEncoderCFG.create(),
+            transformer_encoder_layers_cfg=TransformerLayerCFG.create(),
+            transformer_decoder_cfg=TransformerEncoderCFG.create(),
+            transformer_decoder_layers_cfg=TransformerLayerCFG.create(d_model=384),
+            in_channels=self.in_channels,
+            resample_sr=self.sr,
+            size="base",
+            is_spectrogram=False,
+            process_audio_seconds=self.process_audio_seconds,
+        )
+
+
+        model.load_state_dict(new_state_dict, strict=False)
+        self.teacher = model
 
     def _get_pos_embed_params(self, embedding_dim):
         """Calculates the pos embedding embedding parameters and returns them."""
@@ -462,8 +498,8 @@ class SimCLRDenoise(pl.LightningModule):
                 * idxs_target: (batch_size, n_contexts_per_input, n_targets_per_context, n_target_patches)
                     Indices of the patches that must be predicted by the student.
         """
-        # # Compute the local representations from the waveform
-        # This extract audio can be also channel based, if it is channel based the channel are flatten to the sequencel length
+
+        #Generated Audio
         local_features_generated = self.extract_audio(generated_scene)
         local_features_generated = self.feature_norms(local_features_generated)
         if self.post_extraction_mapper is not None:
@@ -473,28 +509,31 @@ class SimCLRDenoise(pl.LightningModule):
 
         contextual_features_generated = self.encoder_forward(local_features_generated, src_key_padding_mask=None)
 
-
-        # Compute the training targets using the teacher.
+        #Clean Audio
         local_features_clean = self.extract_audio(clean_scene)
         local_features_clean = self.feature_norms(local_features_clean)
         if self.post_extraction_mapper is not None:
             local_features_clean = self.post_extraction_mapper(local_features_clean)
-        
+        local_features_clean= local_features_clean + self.pos_encoding_encoder
         contextual_features_clean = self.encoder_forward(local_features_clean, src_key_padding_mask=None)
 
-        local_features_clean = local_features_clean + self.pos_encoding_encoder
-        local_features_clean = local_features_clean.detach()
-        targets = self._teacher_forward(local_features_clean, src_key_padding_mask=None)
+        #Clean audio WavJEPA-Clean produces this!
+        with torch.no_grad(): 
+            clean_targets = self.teacher.get_audio_representation(clean_scene, padding_mask=None)
+            clean_targets = clean_targets.clone()
 
-        loss_clean_clean = torch.nn.functional.mse_loss(contextual_features_clean, targets)
-        loss_clean_noisy = torch.nn.functional.mse_loss(contextual_features_generated, targets)
+        #Get the loss between clean-clean 
+        #Get the loss between clean-noisy 
+
+        #Test if we can copy the teacher perfectly. Trivial!
+        loss_teacher_clean_student_clean = torch.nn.functional.mse_loss(contextual_features_clean, clean_targets)
+        loss_teacher_clean_student_noisy = torch.nn.functional.mse_loss(contextual_features_generated, clean_targets)
         
-        loss = loss_clean_clean + 0.1 * loss_clean_noisy
+        loss = loss_teacher_clean_student_clean + loss_teacher_clean_student_noisy
         return ForwardReturn(
             local_features_clean=local_features_clean,
             local_features_generated=local_features_generated,
             loss=loss,
-            targets=targets,
         )
 
 
@@ -512,18 +551,7 @@ class SimCLRDenoise(pl.LightningModule):
 
         return contextual_features
 
-    #TODO use flex attention
-    def _teacher_forward(self, 
-    x_contexts: torch.Tensor, 
-    src_key_padding_mask : Optional[torch.BoolTensor] = None
-    ) -> torch.Tensor:
 
-        if self.use_gradient_checkpointing and self.training:
-            contextual_features = checkpoint(self.encoder, x_contexts, use_reentrant=False)
-        else:
-            contextual_features = self.teacher_encoder(x_contexts, src_key_padding_mask = src_key_padding_mask)
-
-        return contextual_features
     @torch.inference_mode()
     def get_audio_representation(self, audio : torch.Tensor, padding_mask : torch.tensor):
         # Get the audio representatin of waveform x.

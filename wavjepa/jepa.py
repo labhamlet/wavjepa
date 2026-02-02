@@ -438,11 +438,14 @@ class JEPA(pl.LightningModule):
             clean_scene = self.resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
-        current_step_ratio = self.get_aug_prob()
 
-        print(f"current clean ratio is: {current_step_ratio}")
-        if torch.rand(1).item() < current_step_ratio:
+        aug_prob = random.random()
+
+        if aug_prob < self.clean_data_ratio:
             generated_scene = clean_scene.clone()
+        else:
+            print("Denoising and Dereverb", flush=True)
+            print(f"Average SNR: {snr.mean()}")
 
         B, C, L_full = generated_scene.shape
 

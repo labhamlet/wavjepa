@@ -272,6 +272,7 @@ def main(cfg):
         # Print training information
         print_training_info(cfg)
 
+        #Load WavJEPA-Clean weights.
         weights = torch.load(cfg.trainer.ckpt_weights, weights_only=False)
         new_state_dict = {}
         for key, value in weights["state_dict"].items():
@@ -288,8 +289,10 @@ def main(cfg):
                 new_state_dict[key] = value
 
         model.load_state_dict(new_state_dict, strict=False)
+
+        #Teacher becomes the WavJEPA-Clean
         if cfg.model != "JEPA":
-            model._init_teacher()
+            model._set_teacher(cfg.trainer.ckpt_weights)
 
         # Start training
         trainer.fit(model, data_module, ckpt_path=None)
