@@ -419,7 +419,7 @@ class JEPA(pl.LightningModule):
         # Generate a naturalistic scene
         # This handles the sitatuion when rir is [None, None], and placed_noise_batch is [None, None]
         generated_scene = generate_scenes_batch.generate_scene(
-            source_rir=source_rir if random.random() > 0.5 else [None],
+            source_rir=source_rir,
             source=final_audio,
             noise=placed_noise_batch,
             snr=snr       

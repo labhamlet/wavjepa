@@ -185,7 +185,7 @@ def setup_trainer(cfg, logger, callbacks) -> pl.Trainer:
         num_nodes=1,
         use_distributed_sampler=False,
         devices=num_gpus,
-        gradient_clip_val=5,
+        gradient_clip_val=1.0,
         gradient_clip_algorithm = "norm",
         strategy='ddp_find_unused_parameters_true' if num_gpus > 1 else "auto",
     )
@@ -274,10 +274,12 @@ def main(cfg):
                 new_state_dict[key] = value
 
         model.load_state_dict(new_state_dict, strict=False)
-        model._set_teacher(cfg.trainer.ckpt_weights)
+        model._set_teacher(cfg.trainer.teacher_ckpt_weights)
+            
+        model._compile()
 
         # Start training
-        trainer.fit(model, data_module, ckpt_path=None)
+        trainer.fit(model, data_module, ckpt_path=cfg.ckpt_path if "ckpt_weights" in cfg else None)
         
     except Exception as e:
         print(f"Training failed with error: {str(e)}")

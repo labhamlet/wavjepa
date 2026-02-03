@@ -189,6 +189,23 @@ class Denoiser(pl.LightningModule):
         model.eval()
         self.teacher = model
 
+    def _compile(self):
+
+        try:
+            self.encoder_forward = torch.compile(self.encoder_forward, fullgraph=True)
+            self.extract_audio = torch.compile(self.extract_audio)
+            self.pad_or_truncate_batch = torch.compile(pad_or_truncate_batch)
+            self.collate_fn = torch.compile(collate_fn)
+            self.resample = torch.compile(resample) 
+
+        except Exception as e:
+            print(f"Warning: Could not compile operations: {e}")
+            self.use_compiled_forward = False
+            self.pad_or_truncate_batch = pad_or_truncate_batch
+            self.collate_fn = collate_fn
+            self.resample = resample
+
+
     def _get_pos_embed_params(self, embedding_dim):
         """Calculates the pos embedding embedding parameters and returns them."""
         # Update positional embedding
@@ -355,7 +372,7 @@ class Denoiser(pl.LightningModule):
             snr=snr       
         )
   
-        generated_scene = pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
+        generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
 
         #Add channel dimension to the final audio as well.
         if final_audio.ndim != 3:
@@ -367,8 +384,8 @@ class Denoiser(pl.LightningModule):
         clean_audio = pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
         # We know that the original sr is 32000.
         if self.sr != ORIGINAL_SR:
-            generated_scene = resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
-            clean_scene = resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
+            generated_scene = self.resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
+            clean_scene = self.resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
 
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
@@ -391,8 +408,8 @@ class Denoiser(pl.LightningModule):
         normalized_generated_audios = index_select_and_normalize(generated_scene, indices)
 
         # Cast to bfloat16 and flatten batch and samples dimensions
-        flattened_clean = collate_fn(normalized_clean_audios.to(torch.bfloat16))
-        flattened_generated = collate_fn(normalized_generated_audios.to(torch.bfloat16))
+        flattened_clean = self.collate_fn(normalized_clean_audios.to(torch.bfloat16))
+        flattened_generated = self.collate_fn(normalized_generated_audios.to(torch.bfloat16))
 
         # Shuffle the samples
         idx = torch.randperm(flattened_generated.size(0))
@@ -478,9 +495,5 @@ class Denoiser(pl.LightningModule):
     src_key_padding_mask : Optional[torch.BoolTensor] = None
     ) -> torch.Tensor:
 
-        if self.use_gradient_checkpointing and self.training:
-            contextual_features = checkpoint(self.encoder, x_contexts, use_reentrant=False)
-        else:
-            contextual_features = self.encoder(x_contexts, src_key_padding_mask = src_key_padding_mask)
-
+        contextual_features = self.encoder(x_contexts, src_key_padding_mask = src_key_padding_mask)
         return contextual_features
