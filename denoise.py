@@ -11,8 +11,7 @@ from utils import get_identity_from_cfg
 from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
-from wavjepa.jepa_denoise import DenoiseJEPA
-from wavjepa.simclr_denoise import SimCLRDenoise
+from wavjepa.denoiser import Denoiser
 
 from wavjepa.masking import RandomClusterMaskMaker, RandomMaskMaker, TimeInverseBlockMasker, MultiBlockMaskMaker
 from wavjepa.extractors import ConvFeatureExtractor, Extractor
@@ -24,7 +23,7 @@ sys.modules['sjepa'] = wavjepa
 ORIGINAL_SR = 32000
 
 # Component registries
-NETWORKS = {"JEPA": DenoiseJEPA, 'SimCLR': SimCLRDenoise}
+NETWORKS = {'SimCLR': Denoiser}
 MASKERS = {"random-masker": RandomMaskMaker, 'random-cluster-masker': RandomClusterMaskMaker, 'time-inverse-masker' : TimeInverseBlockMasker, 'multi-block-masker': MultiBlockMaskMaker}
 EXTRACTORS = {"spatial-conv-extractor": ConvFeatureExtractor, 
               "conv-extractor": ConvFeatureExtractor}
@@ -136,20 +135,13 @@ class ComponentFactory:
                 feature_extractor=extractor,
                 transformer_encoder_cfg = TransformerEncoderCFG.create(), 
                 transformer_encoder_layers_cfg = TransformerLayerCFG.create(),
-                transformer_decoder_cfg = TransformerEncoderCFG.create(), 
-                transformer_decoder_layers_cfg = TransformerLayerCFG.create(d_model = 384),
                 lr=cfg.optimizer.lr,
                 adam_betas=(cfg.optimizer.b1, cfg.optimizer.b2),
                 adam_weight_decay=cfg.optimizer.weight_decay,
                 in_channels=cfg.data.in_channels,
                 resample_sr=cfg.data.sr,
                 process_audio_seconds=cfg.data.process_seconds,
-                use_gradient_checkpointing =cfg.trainer.use_gradient_checkpointing,
                 nr_samples_per_audio=cfg.data.samples_per_audio,
-                compile_modules = cfg.trainer.compile_modules,
-                average_top_k_layers = cfg.trainer.average_top_k_layers,
-                is_spectrogram = cfg.extractor.name == "spectrogram",
-                clean_data_ratio = cfg.data.get("clean_data_ratio", 0.0),
                 size = cfg.trainer.get("size", "base")
             )
         except Exception as e:
@@ -289,10 +281,7 @@ def main(cfg):
                 new_state_dict[key] = value
 
         model.load_state_dict(new_state_dict, strict=False)
-
-        #Teacher becomes the WavJEPA-Clean
-        if cfg.model != "JEPA":
-            model._set_teacher(cfg.trainer.ckpt_weights)
+        model._set_teacher(cfg.trainer.ckpt_weights)
 
         # Start training
         trainer.fit(model, data_module, ckpt_path=None)
