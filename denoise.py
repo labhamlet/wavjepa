@@ -23,7 +23,6 @@ sys.modules['sjepa'] = wavjepa
 ORIGINAL_SR = 32000
 
 # Component registries
-NETWORKS = {'SimCLR': Denoiser}
 MASKERS = {"random-masker": RandomMaskMaker, 'random-cluster-masker': RandomClusterMaskMaker, 'time-inverse-masker' : TimeInverseBlockMasker, 'multi-block-masker': MultiBlockMaskMaker}
 EXTRACTORS = {"spatial-conv-extractor": ConvFeatureExtractor, 
               "conv-extractor": ConvFeatureExtractor}
@@ -123,15 +122,9 @@ class ComponentFactory:
     @staticmethod
     def create_network(cfg, extractor : Extractor) -> JEPA:
         """Create and configure the main network."""
-        network_class = NETWORKS.get(cfg.model)
-        if network_class is None:
-            raise ValueError(
-                f"Unknown network type: {cfg.model}. "
-                f"Available networks: {list(NETWORKS.keys())}"
-            )
-        
+
         try:
-            return network_class(
+            return Denoiser(
                 feature_extractor=extractor,
                 transformer_encoder_cfg = TransformerEncoderCFG.create(), 
                 transformer_encoder_layers_cfg = TransformerLayerCFG.create(),
@@ -152,7 +145,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa_denoised_conv_05/",
+        f"{cfg.save_dir}/tb_logs_jepa_denoised/",
         name=identity.replace("_", "/"),
     )
 
@@ -162,7 +155,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised_conv_05/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=2500,

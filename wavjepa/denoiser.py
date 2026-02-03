@@ -391,8 +391,8 @@ class Denoiser(pl.LightningModule):
         normalized_generated_audios = index_select_and_normalize(generated_scene, indices)
 
         # Cast to bfloat16 and flatten batch and samples dimensions
-        flattened_clean = self.collate_fn(normalized_clean_audios.to(torch.bfloat16))
-        flattened_generated = self.collate_fn(normalized_generated_audios.to(torch.bfloat16))
+        flattened_clean = collate_fn(normalized_clean_audios.to(torch.bfloat16))
+        flattened_generated = collate_fn(normalized_generated_audios.to(torch.bfloat16))
 
         # Shuffle the samples
         idx = torch.randperm(flattened_generated.size(0))
