@@ -7,8 +7,8 @@ from typing import List, Any, Optional, Tuple
 import torch
 import torchaudio
 from torch import nn
-from einops import repeat, rearrange
 import torch.nn.functional as F
+import torchaudio.functional as F_audio
 from torch.utils.checkpoint import checkpoint
 import pytorch_lightning as pl
 
@@ -314,8 +314,8 @@ class SimCLRDenoise(pl.LightningModule):
         """
 
         def index_select_and_normalize(audio, indices):
-            clean_scene_expanded = audio.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
-            return_audio = torch.gather(clean_scene_expanded, 3, indices)
+            audio = audio.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+            return_audio = torch.gather(audio, 3, indices)
 
             mean = return_audio.mean(dim=(-2, -1), keepdim=True)
             std = return_audio.std(dim=(-2, -1), keepdim=True)
@@ -410,7 +410,7 @@ class SimCLRDenoise(pl.LightningModule):
             snr=snr       
         )
 
-        noisy_scene =  F.add_noise(final_audio, placed_noise_batch, snr)
+        noisy_scene =  F_audio.add_noise(final_audio, placed_noise_batch, snr)
         reverberant_scene = convolve_with_rir(final_audio, source_rir[:, [0], :])
 
         
@@ -421,6 +421,10 @@ class SimCLRDenoise(pl.LightningModule):
         #Add channel dimension to the final audio as well.
         if final_audio.ndim != 3:
             final_audio = final_audio.unsqueeze(1)
+        if noisy_scene.ndim != 3:
+            noisy_scene = noisy_scene.unsqueeze(1)
+        if reverberant_scene.ndim != 3:
+            reverberant_scene = reverberant_scene.unsqueeze(1)
         assert generated_scene.ndim == final_audio.ndim
         assert noisy_scene.ndim == final_audio.ndim 
         assert reverberant_scene.ndim == final_audio.ndim 
@@ -449,7 +453,7 @@ class SimCLRDenoise(pl.LightningModule):
         # Create indices for gathering
         # Shape: (B, nr_samples, target_length)
         indices = rand_starts.unsqueeze(-1) + torch.arange(self.target_length, device=self.device)
-
+        indices = indices.unsqueeze(2).expand(-1, -1, C, -1)
 
         normalized_generated_audios = index_select_and_normalize(generated_scene, indices)
         normalized_clean_audios = index_select_and_normalize(clean_scene, indices)
