@@ -272,8 +272,9 @@ class DenoiseJEPA(pl.LightningModule):
             weight_decay=self.hparams.adam_weight_decay,
         )
         cosine_annealing = transformers.get_cosine_schedule_with_warmup(optimizer,
-                                 num_warmup_steps=5000, num_training_steps=self.trainer.max_steps)
-
+                                 num_warmup_steps=5000, 
+                                 num_training_steps=self.trainer.max_steps,
+                                 min_lr=2e-4)
         return {"optimizer": optimizer,
                 'lr_scheduler' : {"scheduler": cosine_annealing, "interval": "step"}}
 
@@ -326,6 +327,16 @@ class DenoiseJEPA(pl.LightningModule):
         """
         Runs on GPU. Splits batch by SR, resamples, recombines.
         """
+
+        def index_select_and_normalize(audio, indices):
+            clean_scene_expanded = audio.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+            return_audio = torch.gather(clean_scene_expanded, 3, indices)
+
+            mean = return_audio.mean(dim=(-2, -1), keepdim=True)
+            std = return_audio.std(dim=(-2, -1), keepdim=True)
+            normalized = (return_audio - mean) / (std + 1e-5) # Add epsilon for stability
+            return normalized 
+
         # Unpack batch (Audio is all 480,000 length here, and noise is 320,000)
         (
             audio_batch,
@@ -414,17 +425,30 @@ class DenoiseJEPA(pl.LightningModule):
             snr=snr       
         )
 
+        noisy_scene =  F.add_noise(final_audio, placed_noise_batch, snr)
+        reverberant_scene = convolve_with_rir(final_audio, source_rir[:, [0], :])
+
+        
         generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
+        noisy_scene = self.pad_or_truncate_batch(noisy_scene, 10 * ORIGINAL_SR)
+        reverberant_scene = self.pad_or_truncate_batch(reverberant_scene, 10 * ORIGINAL_SR)
+    
         #Add channel dimension to the final audio as well.
         if final_audio.ndim != 3:
             final_audio = final_audio.unsqueeze(1)
         assert generated_scene.ndim == final_audio.ndim
+        assert noisy_scene.ndim == final_audio.ndim 
+        assert reverberant_scene.ndim == final_audio.ndim 
+
 
         clean_audio = self.pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
         # We know that the original sr is 32000.
         if self.sr != ORIGINAL_SR:
             generated_scene = self.resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
             clean_scene = self.resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
+            reverberant_scene = self.resample(reverberant_scene, resample_sr=self.sr, original_sr=ORIGINAL_SR)
+            noisy_scene = self.resample(noisy_scene, resample_sr=self.sr, original_sr=ORIGINAL_SR)
+
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
 
@@ -441,43 +465,26 @@ class DenoiseJEPA(pl.LightningModule):
         # Shape: (B, nr_samples, target_length)
         indices = rand_starts.unsqueeze(-1) + torch.arange(self.target_length, device=self.device)
 
-        # Expand scene and indices for gathering
-        # scene: (B, C, L_full) -> (B, 1, C, L_full) -> (B, nr_samples, C, L_full)
-        generated_scene_expanded = generated_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
-        # indices: (B, nr_samples, target_length) -> (B, nr_samples, 1, target_length) -> (B, nr_samples, C, target_length)
-        indices_expanded = indices.unsqueeze(2).expand(-1, -1, C, -1)
 
-        # Gather all audio windows in one operation
-        # Shape: (B, nr_samples, C, target_length)
-        return_generated_audios = torch.gather(generated_scene_expanded, 3, indices_expanded)
-
-        # To preserve ITD and ILD, normalize jointly across channels and time.
-        # Calculate mean and std over the last two dimensions (C, L).
-        mean = return_generated_audios.mean(dim=(-2, -1), keepdim=True)
-        std = return_generated_audios.std(dim=(-2, -1), keepdim=True)
-        normalized_generated_audios = (return_generated_audios - mean) / (std + 1e-5) # Add epsilon for stability
-
-
-        clean_scene_expanded = clean_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
-
-        return_clean_audios = torch.gather(clean_scene_expanded, 3, indices_expanded)
-
-        mean = return_clean_audios.mean(dim=(-2, -1), keepdim=True)
-        std = return_clean_audios.std(dim=(-2, -1), keepdim=True)
-        normalized_clean_audios = (return_clean_audios - mean) / (std + 1e-5) # Add epsilon for stability
-
+        normalized_generated_audios = index_select_and_normalize(generated_scene, indices)
+        normalized_clean_audios = index_select_and_normalize(clean_scene, indices)
+        normalized_noisy_audios = index_select_and_normalize(noisy_scene, indices)
+        normalized_reverb_audios = index_select_and_normalize(reverberant_scene, indices)
+       
         # Cast to bfloat16 and flatten batch and samples dimensions
         flattened_generated = self.collate_fn(normalized_generated_audios.to(torch.bfloat16))
         flattened_clean = self.collate_fn(normalized_clean_audios.to(torch.bfloat16))
+        flattened_noisy = self.collate_fn(normalized_noisy_audios.to(torch.bfloat16))
+        flattened_reverb = self.collate_fn(normalized_reverb_audios.to(torch.bfloat16))
 
         # Shuffle the samples
         idx = torch.randperm(flattened_generated.size(0))
 
-        return flattened_generated[idx, ...], flattened_clean[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
+        return flattened_generated[idx, ...], flattened_clean[idx, ...], flattened_noisy[idx, ...], flattened_reverb[idx, ...]
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> ForwardReturn:
-        generated_scene, clean_scene, ctx_masks, target_indices, ctx_and_target_masks = batch
-        out = self(generated_scene, clean_scene, ctx_masks, target_indices, ctx_and_target_masks)
+        generated_scene, clean_scene, noisy_scene, reverberant_scene = batch
+        out = self(generated_scene, clean_scene, noisy_scene, reverberant_scene)
 
         # Enhanced logging
         log_data = {
@@ -491,37 +498,9 @@ class DenoiseJEPA(pl.LightningModule):
         
         return out
 
-    def masked_loss(self, pred, target, target_indices):
-        """
-        Calculates the masked loss using broadcasting to avoid memory-heavy repeats.
-
-        pred:   Tensor of shape [(B * N), T, D]
-        target: Tensor of shape [B, T, D]
-        mask:   Tensor of shape [B, N, T]
-        """
-        B, N, _ = target_indices.shape
-        D = pred.shape[-1]
-
-        pred_reshaped = pred.view(B, N, -1, D)
-
-        # This makes it broadcastable to the shape of pred_reshaped [B, N, T, D] during the loss
-        
-        target = repeat(target, "B T D -> B N T D", N = N)
-        loss = self.loss_fn(pred_reshaped, target)  # -> Shape: [B, N, T, D]
-
-        loss_per_timestep = loss.mean(dim=-1)  # -> Shape: [B, N, T]
-
-        # No rearrange is needed for the mask.
-        masked_loss_tensor = loss_per_timestep * target_indices  # -> Shape: [B, N, T]
-
-        # Calculate the final mean loss over only the masked elements.
-        total_loss = masked_loss_tensor.sum()
-        indices_count = target_indices.sum()
-
-        return total_loss / (indices_count + 1e-8)
     
 
-    def forward(self, generated_scene: torch.Tensor, clean_scene : torch.Tensor, ctx_masks, target_indices, ctx_and_target_masks) -> ForwardReturn:
+    def forward(self, generated_scene: torch.Tensor, clean_scene : torch.Tensor, noisy_scene, reverberant_scene) -> ForwardReturn:
         """
         Args:
             batch: torch.Tensor

@@ -33,7 +33,7 @@ model_size=base
 
 
 # weights=/gpfs/work5/0/prjs1261/wavjepa_base_final/step=375000.ckpt
-weights=/gpfs/work4/0/prjs1338/saved_models_jepa_denoised/InChannels=1/WithNoise=True/WithRIR=True/SNRl=-5/SNRh=5/CleanRatio=0.0/SR=16000/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=5000-v1.ckpt
+weights=/gpfs/work4/0/prjs1338/saved_models_jepa_denoised/InChannels=1/WithNoise=True/WithRIR=True/SNRl=-5/SNRh=5/CleanRatio=0.0/SR=16000/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=15000-v1.ckpt
 
 model_options="{\"sr\": \"$sr\", \"model\": \"$model_size\"}"
 
