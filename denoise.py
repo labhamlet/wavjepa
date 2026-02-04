@@ -135,7 +135,8 @@ class ComponentFactory:
                 resample_sr=cfg.data.sr,
                 process_audio_seconds=cfg.data.process_seconds,
                 nr_samples_per_audio=cfg.data.samples_per_audio,
-                size = cfg.trainer.get("size", "base")
+                size = cfg.trainer.get("size", "base"),
+                alpha=cfg.trainer.alpha
             )
         except Exception as e:
             raise RuntimeError(f"Failed to create network instance: {str(e)}")
@@ -145,7 +146,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa_denoised/",
+        f"{cfg.save_dir}/tb_logs_jepa_denoised_l2/",
         name=identity.replace("_", "/"),
     )
 
@@ -155,7 +156,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised_l2/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=2500,
@@ -239,7 +240,7 @@ def cleanup_memory():
     torch.cuda.empty_cache()
 
 
-@hydra.main(version_base=None, config_path="./configs", config_name="base")
+@hydra.main(version_base=None, config_path="./configs", config_name="denoise")
 def main(cfg):
     """Main training function."""
     try:
@@ -258,7 +259,7 @@ def main(cfg):
         print_training_info(cfg)
 
         #Load WavJEPA-Clean weights.
-        weights = torch.load(cfg.trainer.ckpt_weights, weights_only=False)
+        weights = torch.load(cfg.trainer.teacher_ckpt_weights, weights_only=False)
         new_state_dict = {}
         for key, value in weights["state_dict"].items():
             if key.startswith("extract_audio._orig_mod"):
@@ -274,12 +275,11 @@ def main(cfg):
                 new_state_dict[key] = value
 
         model.load_state_dict(new_state_dict, strict=False)
-        model._set_teacher(cfg.trainer.teacher_ckpt_weights)
-            
+        model._set_teacher(cfg.trainer.teacher_ckpt_weights)            
         model._compile()
 
         # Start training
-        trainer.fit(model, data_module, ckpt_path=cfg.ckpt_path if "ckpt_weights" in cfg else None)
+        trainer.fit(model, data_module, ckpt_path=cfg.ckpt_path if "ckpt_path" in cfg else None)
         
     except Exception as e:
         print(f"Training failed with error: {str(e)}")

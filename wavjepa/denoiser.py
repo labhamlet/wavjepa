@@ -106,9 +106,11 @@ class Denoiser(pl.LightningModule):
         in_channels : int = 2,
         nr_samples_per_audio = 16,
         size : str = "base",
+        alpha: float = 0.8,
         **kwargs : dict[str, Any],
     ):
         super().__init__(**kwargs)
+        self.alpha=alpha
         self.resampler_48k = torchaudio.transforms.Resample(48000, ORIGINAL_SR).to(
             self.device
         )
@@ -147,7 +149,10 @@ class Denoiser(pl.LightningModule):
         self.post_extraction_mapper : Optional[nn.Module] = nn.Linear(feature_extractor.embedding_dim, self.encoder_embedding_dim) if feature_extractor.embedding_dim != self.encoder_embedding_dim else None
 
         self.pos_encoding_encoder = self._get_pos_embed_params(self.encoder_embedding_dim)
-
+        
+        self.pad_or_truncate_batch = pad_or_truncate_batch
+        self.collate_fn = collate_fn
+        self.resample = resample
 
     def _set_teacher(self, weights_ckpt): 
         weights = torch.load(weights_ckpt, weights_only=False)
@@ -201,9 +206,6 @@ class Denoiser(pl.LightningModule):
         except Exception as e:
             print(f"Warning: Could not compile operations: {e}")
             self.use_compiled_forward = False
-            self.pad_or_truncate_batch = pad_or_truncate_batch
-            self.collate_fn = collate_fn
-            self.resample = resample
 
 
     def _get_pos_embed_params(self, embedding_dim):
@@ -242,17 +244,6 @@ class Denoiser(pl.LightningModule):
         return pos_embed
 
 
-    def _compile_operations(self):
-        """
-        Use torch.compile on the extractor, encoder and decoder blocks for faster forward
-        """
-        try:
-            self.encoder_forward = torch.compile(self.encoder_forward, fullgraph=True)
-            self.extract_audio = torch.compile(self.extract_audio)
-
-        except Exception as e:
-            print(f"Warning: Could not compile operations: {e}")
-            self.use_compiled_forward = False
 
     def configure_optimizers(self):
         trainables = [p for p in self.parameters() if p.requires_grad]
@@ -476,10 +467,10 @@ class Denoiser(pl.LightningModule):
             clean_targets = self.teacher.get_audio_representation(clean_scene, padding_mask=None)
             clean_targets = clean_targets.clone()
 
-        loss_clean = -F.cosine_similarity(contextual_features_clean.flatten(0,1), clean_targets.flatten(0,1), dim=-1).mean()
-        loss_denoise_dereverb = -F.cosine_similarity(contextual_features_generated.flatten(0,1), clean_targets.flatten(0,1), dim=-1).mean()   
+        loss_clean = F.mse_loss(contextual_features_clean, clean_targets)
+        loss_denoise_dereverb = F.mse_loss(contextual_features_generated, clean_targets)   
         
-        loss = (0.8 * loss_clean) + (0.2 * loss_denoise_dereverb)
+        loss = (self.alpha * loss_clean) + ((1-self.alpha) * loss_denoise_dereverb)
         
         return ForwardReturn(
             loss=loss,

@@ -7,8 +7,9 @@ def get_identity_from_cfg(cfg):
         cfg.data.snr_high,
         cfg.data.clean_data_ratio
     )
-    identity += "SR={}_".format(
-        cfg.data.sr
+    identity += "SR={}_alpha={}_".format(
+        cfg.data.sr,
+        cfg.trainer.get("alpha")
     )
     identity += "BatchSize={}_NrSamples={}_NrGPUs={}_ModelSize={}_LR={}_".format(
         cfg.trainer.get("batch_size"),
