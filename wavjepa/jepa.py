@@ -213,31 +213,35 @@ class JEPA(pl.LightningModule):
             requires_grad=False,
         )
         positions = np.arange(self.total_patches, dtype=np.float64)
+        
         if self.is_spectrogram:
             # If it is a spectrogram, we use 2d sincos embeddings.
             pos_embed_data = get_2d_sincos_pos_embed(
                 embedding_dim, self.extract_audio.grid_size, cls_token_num=0
             )
-        #TODO! Remove this total patches later.
-        elif not self.is_spectrogram and self.in_channels == 2 and (self.total_patches == 400):
-            # We use 1D sincos embeddings with channel number indicated on the last 384 dimensions.
-            print("Using Binaural Positional Embeddings")
-            pos_embed_data = get_binaural_pos_embed(embedding_dim, time_steps=self.total_patches // self.in_channels
+        elif self.in_channels == 2:
+            # We use 1D sincos embeddings with channel number indicated on the embedding.
+            # We assume total_patches is (time_steps * channels).
+            if self.total_patches % self.in_channels != 0:
+                raise ValueError(
+                    f"total_patches ({self.total_patches}) must be divisible by "
+                    f"in_channels ({self.in_channels}) for binaural embeddings."
+                )
+            
+            print(f"Using Binaural Positional Embeddings for {self.in_channels} channels")
+            pos_embed_data = get_binaural_pos_embed(
+                embedding_dim, 
+                time_steps=self.total_patches // self.in_channels
             )
-        elif not self.is_spectrogram and self.in_channels == 2 and (self.total_patches == 200):
-            #Use 1D pos_embeddings if channel-mixing feature extractor
-            pos_embed_data = get_1d_sincos_pos_embed_from_grid(
-                embedding_dim,
-                positions,
-            )     
-        elif not self.is_spectrogram and self.in_channels == 1 and (self.total_patches == 200):
+        elif self.in_channels == 1:
             # IF it is plain audio, we used 1d sincos embeddings
             pos_embed_data = get_1d_sincos_pos_embed_from_grid(
                 embedding_dim,
                 positions,
             )
         else:
-            raise Exception(f"Not implemented for more in_channels, {self.in_channels}, {self.total_patches}")
+            raise Exception(f"Not supported for audio channels more than 2, you got {self.in_channels}")
+        
         pos_embed.data.copy_(torch.from_numpy(pos_embed_data).float().unsqueeze(0))
         return pos_embed
 
@@ -342,6 +346,7 @@ class JEPA(pl.LightningModule):
             audio_batch,
             sr_batch,
             source_rir,
+            noise_rirs,
             noise,
             noise_lengths,
             snr,
