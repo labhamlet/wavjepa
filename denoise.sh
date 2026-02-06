@@ -3,7 +3,7 @@
 #SBATCH --gpus=2
 #SBATCH --job-name=JEPATargeLength
 #SBATCH --exclude=gcn131
-#SBATCH --time=66:00:00
+#SBATCH --time=10:00:00
 #SBATCH --output=slurm_output_%A_%a.out
 #SBATCH --array=0
 
@@ -15,4 +15,4 @@ module load Anaconda3/2023.07-2
 source activate sjape
 
 
-python3 train.py data=audioset extractor=ConvFeatureExtractor trainer.batch_size=32 trainer.num_gpus=2
+python3 denoise.py trainer.batch_size=32 trainer.num_gpus=2 trainer.alpha=0.0

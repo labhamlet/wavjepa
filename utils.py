@@ -1,14 +1,15 @@
 def get_identity_from_cfg(cfg):
-    identity = "InChannels={}_WithNoise={}_WithRIR={}_CleanRatio={}_".format(
+    identity = "InChannels={}_WithNoise={}_WithRIR={}_SNRl={}_SNRh={}_CleanRatio={}_".format(
         cfg.data.get("in_channels", None),
         cfg.data.with_noise,
         cfg.data.with_rir,
-        cfg.data.get("clean_data_ratio", 1.0),
+        cfg.data.snr_low,
+        cfg.data.snr_high,
+        cfg.data.clean_data_ratio
     )
-    identity += "Extractor={}_ShareWeights={}_SR={}_".format(
-        cfg.extractor.name,
-        cfg.extractor.get("share_weights_over_channels", False),
+    identity += "SR={}_alpha={}_".format(
         cfg.data.sr,
+        cfg.trainer.get("alpha")
     )
     identity += "BatchSize={}_NrSamples={}_NrGPUs={}_ModelSize={}_LR={}_".format(
         cfg.trainer.get("batch_size"),

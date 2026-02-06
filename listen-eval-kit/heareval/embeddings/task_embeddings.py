@@ -231,10 +231,7 @@ def save_timestamp_embedding_and_labels(
         json.dump(timestamps[i].tolist(), open(f"{out_file}.timestamps.json", "w"))
         json.dump(labels[i], open(f"{out_file}.target-labels.json", "w"), indent=4)
 
-
-def get_labels_for_timestamps(
-    labels: List, timestamps: np.ndarray, source: Optional[str]
-) -> List:
+def get_labels_for_timestamps(labels: List, timestamps: np.ndarray, source: Optional[str]) -> List:
     # -> List[List[List[str]]]:
     # -> List[List[str]]:
     # TODO: Is this function redundant?
@@ -248,21 +245,15 @@ def get_labels_for_timestamps(
         # Add all events to the label tree
         for event in label:
             if "direction" in event:
-                assert source is not None, (
-                    "Got source None, please pass source_dyamics: (dynamic, static) in metadata"
-                )
+                assert source is not None, "Got source None, please pass source_dyamics: (dynamic, static) in metadata"
             if "direction" in event and source == "static":
-                tree.addi(
-                    event["start"], event["end"], (event["label"], event["direction"])
-                )
+                tree.addi(event["start"], event["end"], (event["label"], event["direction"]))
             elif "direction" in event and source == "dynamic":
                 assert "source_idx" in event, "Events do not contain a source idx"
-                tree.addi(
-                    event["start"], event["end"], (event["label"], event["direction"])
-                )
+                tree.addi(event["start"], event["end"], (event["label"], event["direction"]))
             elif "direction" not in event and source is None:
-                # adding 0.0001 so that end includes the event, but is it really necessary?
-                # This is from hear-eval-kit
+                #adding 0.0001 so that end includes the event, but is it really necessary?
+                #This is from hear-eval-kit
                 tree.addi(event["start"], event["end"] + 0.0001, event["label"])
             else:
                 raise ValueError("Got direction and source not matching")
@@ -272,12 +263,10 @@ def get_labels_for_timestamps(
         # interval labels now is not only only, but could also be Tuple of str and List[float]
         # List of float corresponds to the direction labels of the events.
         for j, t in enumerate(timestamps[i]):
-            interval_labels: List[str | Tuple[str, List[float]]] = [
-                interval.data for interval in tree[t]
-            ]
-            # When we have a dynamic source, we select only one event of the same class!
-            # Or not, because this will actually mess-up with the evaluation code.
-            # We do have a hungarian algorithm that will solve the assignment issue in the eval code!
+            interval_labels: List[str | Tuple[str, List[float]]] = [interval.data for interval in tree[t]]
+            #When we have a dynamic source, we select only one event of the same class!
+            #Or not, because this will actually mess-up with the evaluation code.
+            #We do have a hungarian algorithm that will solve the assignment issue in the eval code!
             labels_for_sound.append(interval_labels)
             # If we want to store the timestamp too
             # labels_for_sound.append([float(t), interval_labels])
@@ -295,7 +284,7 @@ def memmap_embeddings(
     split_name: str,
     embed_task_dir: Path,
     split_data: Dict,
-    audio_lengths: Optional[Dict[str, float]],
+    audio_lengths : Optional[Dict[str, float]]
 ):
     """
     Memmap all the embeddings to one file, and pickle all the labels.
@@ -482,9 +471,7 @@ def task_embeddings(
                 for audio, filename, length in zip(audios, filenames, lengths):
                     audio_lengths[filename] = length.item()
 
-                labels = get_labels_for_timestamps(
-                    labels, timestamps, metadata.get("source_dynamics", None)
-                )
+                labels = get_labels_for_timestamps(labels, timestamps, metadata.get("source_dynamics", None))
                 assert len(labels) == len(filenames)
                 assert len(labels[0]) == len(timestamps[0])
                 save_timestamp_embedding_and_labels(
@@ -495,6 +482,4 @@ def task_embeddings(
                     f"Unknown embedding type: {metadata['embedding_type']}"
                 )
 
-        memmap_embeddings(
-            outdir, prng, metadata, split, embed_task_dir, split_data, audio_lengths
-        )
+        memmap_embeddings(outdir, prng, metadata, split, embed_task_dir, split_data, audio_lengths)

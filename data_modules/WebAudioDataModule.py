@@ -10,6 +10,23 @@ from typing import List
 import torch.nn.functional as F
 
 
+
+
+def pad_or_randomly_select(
+    audio : torch.Tensor, target_length: int
+    ) -> torch.Tensor:
+    audio_length = audio.shape[-1]
+    padding = target_length - audio_length
+    if padding > 0:
+        audio = F.pad(audio, (0, padding), "constant", 0)
+    elif padding < 0:  # select a random 10 seconds.
+        rand_index = torch.randint(0, audio_length - target_length, (1,))
+        audio = audio[rand_index : rand_index + target_length]
+    else:
+        audio = audio
+    assert audio.shape[-1] == target_length
+    return audio
+
 def mask_to_indices(mask: torch.BoolTensor, check: bool = False) -> torch.Tensor:
     """
     Returns the indices of the true elements.
@@ -282,18 +299,11 @@ class WebAudioDataModule(pl.LightningDataModule):
 
         audio, audio_sr = sample[0]
         audio = audio[0]  # Take the left channel if it is stereo audio
-        audio_length = audio.shape[-1]
-        padding = self.audio_target_length - audio_length
-        if padding > 0:
-            audio = F.pad(audio, (0, padding), "constant", 0)
-        elif padding < 0:  # select a random 10 seconds.
-            rand_index = torch.randint(0, audio_length - self.audio_target_length, (1,))
-            audio = audio[rand_index : rand_index + self.audio_target_length]
-        else:
-            audio = audio
-        assert audio.shape[-1] == self.audio_target_length
+
+        audio = pad_or_randomly_select(audio, self.audio_target_length)
 
         # If with the rir, load the rir.
+        # Here, take the source RIR.
         if self.with_rir:
             scene = next(self.rir_loader)
             source_rir = scene[0]
@@ -303,31 +313,16 @@ class WebAudioDataModule(pl.LightningDataModule):
             if self.with_rir:
                 noise_rirs = rirs[1:]
             raw_noise = next(self.noise_loader)
-            noise_length = raw_noise.shape[-1]
-            # raw_noise is longer than target seconds.
-            if noise_length > self.noise_target_length:
-                # Cut 10 seconds of noise randomly.
-                rand_index = torch.randint(
-                    0, noise_length - self.noise_target_length, (1,)
-                )
-                raw_noise = raw_noise[
-                    rand_index : rand_index + self.noise_target_length
-                ]
-            elif noise_length < self.noise_target_length:
-                # Here we know for sure that noise is either
-                padding = self.NOISE_SR * self.TARGET_SECONDS - raw_noise.shape[-1]
-                raw_noise = F.pad(raw_noise, (0, padding), "constant", 0)
-            else:
-                raw_noise = raw_noise
+            noise_length = max(raw_noise.shape)
 
-            assert raw_noise.shape[-1] == self.noise_target_length
-            noise = raw_noise
+            #Here we randomly select a 10 second noise, or pad it to 10 seconds. 
+            #We keep the noise length later to know if we need to fade in and out.
+            noise = pad_or_randomly_select(raw_noise, self.noise_target_length)
             snr = (
                 torch.distributions.uniform.Uniform(self.snr_low, self.snr_high)
                 .sample()
                 .item()
             )
-            snr = torch.Tensor([snr, snr])
 
         context_mask, target_indices, ctx_and_target_masks = self.masker(
             batch_size=self.nr_samples_per_audio,

@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --exclude=gcn118
 #SBATCH --time=00:10:00
-#SBATCH --output=hear/slurm_output_%A_%a.out
+#SBATCH --output=hear_reverb/slurm_output_%A_%a.out
 #SBATCH --array=0
 
 cd ~/phd/wavjepa
@@ -20,18 +20,17 @@ esc50-v2.0.0-full
 )
 
 task_name=${task_names[$SLURM_ARRAY_TASK_ID]}
-tasks_dir=/projects/prjs1338/tasks
-embeddings_dir="/projects/prjs1338/JepaEmbeddingsBB"
-score_dir="hear_wavjepa"
+tasks_dir=/projects/prjs1338/create_reverb_hear/outputs
+
+embeddings_dir="/projects/prjs1338/JepaEmbeddingsReverb"
+score_dir="reverb_hear_wavjepa"
 
 model_name="hear_configs.WavJEPA"
 sr=16000
 model_size=base
 
-#Clean ratio is 0.8
-# weights=/gpfs/work4/0/prjs1338/saved_models_jepa_real/InChannels=1/WithNoise=True/WithRIR=True/SNRl=5/SNRh=40/CleanRatio=0.8/SR=16000/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=50000.ckpt
 
-weights=/gpfs/work4/0/prjs1338/saved_models_jepa_denoised_new/InChannels=1/WithNoise=True/WithRIR=True/SNRl=-5/SNRh=5/CleanRatio=0.0/SR=16000/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0001/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=22500-v1.ckpt
+weights=/gpfs/work5/0/prjs1261/wavjepa_base_final/step=375000.ckpt
 
 model_options="{\"sr\": \"$sr\", \"model\": \"$model_size\"}"
 

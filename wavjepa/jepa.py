@@ -114,7 +114,7 @@ class JEPA(pl.LightningModule):
         use_gradient_checkpointing: bool = False,
         compile_modules : bool = False,
         is_spectrogram : bool = True,
-        clean_data_ratio : float = 0.2,
+        clean_data_ratio : float = 0.0,
         size : str = "base",
         **kwargs : dict[str, Any],
     ):
@@ -128,6 +128,7 @@ class JEPA(pl.LightningModule):
         self.valid_len_44k = int(self.TARGET_SECONDS * 44100)
         self.valid_len_32k = int(self.TARGET_SECONDS * 32000)
         self.target_audio_length = self.TARGET_SECONDS * ORIGINAL_SR
+        self.clean_data_ratio = clean_data_ratio
 
         self.sr = resample_sr 
         self.is_spectrogram = is_spectrogram
@@ -138,7 +139,6 @@ class JEPA(pl.LightningModule):
         self.use_compiled_forward = compile_modules
         self.use_gradient_checkpointing = use_gradient_checkpointing
         self.in_channels = in_channels
-        self.clean_data_ratio = clean_data_ratio
         self.save_hyperparameters(
             ignore=["feature_encoder", "feature_extractor", "loss_fn"]
         )
@@ -334,6 +334,8 @@ class JEPA(pl.LightningModule):
             targets = layer_outputs[-1]
         return targets
 
+    def get_aug_prob(self):
+        return 1 - (self.global_step / self.trainer.max_steps)
 
     def on_after_batch_transfer(self, batch, dataloader_idx):
         """
@@ -356,7 +358,7 @@ class JEPA(pl.LightningModule):
         placed_noise_batch = [None]
 
         batch_size = audio_batch.shape[0]
-
+        
         # 2. RESAMPLE AUDIO (Vectorized)
         mask_48k = sr_batch == 48000
         mask_44k = sr_batch == 44100
@@ -386,21 +388,28 @@ class JEPA(pl.LightningModule):
             )
             final_audio[mask_44k] = self.resampler_44k(audio)
 
+        #Get the noise
         if noise[0] is not None:
             # This is the real length of the noise actually.
             placed_noise_batch = torch.zeros_like(final_audio)
             for i in range(batch_size):
-                # get the noise length.
+                #Did we pad the noise?
                 valid_len = min(noise_lengths[i].item(), noise.shape[-1])
                 current_noise = noise[i, :valid_len]
 
-                # Normalize before fading and fade.
+                #Normalize only the non-faded part.
                 current_noise = normalize_audio(current_noise)
+                #Fade in and out the noise.
+                #If the real length was longer than the audio 
+                #we apply both fade-in and fade-out
+                #Else
+                #we apply fade-out only.
                 current_noise = generate_scenes.fade_noise(
-                    current_noise, final_audio[i], ORIGINAL_SR
+                    noise_lengths[i].item(), current_noise, final_audio[i], ORIGINAL_SR
                 )
-
-                # SNR ensures that there is no noise added where noise is not present.
+                
+                #If target audio length is bigger than the valid length
+                #Place the noise randomly.
                 if self.target_audio_length > valid_len:
                     start_idx = torch.randint(
                         0, self.target_audio_length - valid_len, (1,)
@@ -409,39 +418,42 @@ class JEPA(pl.LightningModule):
                     placed_noise_batch[i, start_idx : start_idx + valid_len] = (
                         current_noise
                     )
-                else:
+                else: 
                     placed_noise_batch[i] = current_noise[: self.target_audio_length]
         
-        aug_prob = random.random()
-
-        # With 0.8 probability we do not augment... so to find augment prob we need do 1 - self.augment_prob.
-        if aug_prob < self.clean_data_ratio:
-             #Do it in a list to make it look like a "batch"
-             placed_noise_batch = [None]
-             source_rir = [None]
-             noise_rirs = [None]
-             snr = [None]
         # Generate a naturalistic scene
         # This handles the sitatuion when rir is [None, None], and placed_noise_batch is [None, None]
         generated_scene = generate_scenes_batch.generate_scene(
             source_rir=source_rir,
             source=final_audio,
             noise=placed_noise_batch,
-            noise_rirs=noise_rirs,
-            snr=snr,
-            sr = ORIGINAL_SR
+            snr=snr       
         )
 
         generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
+        #Add channel dimension to the final audio as well.
+        if final_audio.ndim != 3:
+            final_audio = final_audio.unsqueeze(1)
+        assert generated_scene.ndim == final_audio.ndim
+
+        clean_audio = self.pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
         # We know that the original sr is 32000.
         if self.sr != ORIGINAL_SR:
             generated_scene = self.resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
-        
+            clean_scene = self.resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         
+
+        aug_prob = random.random()
+
+        if aug_prob < self.clean_data_ratio:
+            generated_scene = clean_scene.clone()
+        else:
+            print("Denoising and Dereverb", flush=True)
+            print(f"Average SNR: {snr.mean()}")
+
         B, C, L_full = generated_scene.shape
 
-        # 3. Vectorized window sampling
         # Generate all random start indices at once
         rand_starts = torch.randint(
             0, L_full - self.target_length + 1,
@@ -455,33 +467,41 @@ class JEPA(pl.LightningModule):
 
         # Expand scene and indices for gathering
         # scene: (B, C, L_full) -> (B, 1, C, L_full) -> (B, nr_samples, C, L_full)
-        scene_expanded = generated_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+        generated_scene_expanded = generated_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
         # indices: (B, nr_samples, target_length) -> (B, nr_samples, 1, target_length) -> (B, nr_samples, C, target_length)
         indices_expanded = indices.unsqueeze(2).expand(-1, -1, C, -1)
 
         # Gather all audio windows in one operation
         # Shape: (B, nr_samples, C, target_length)
-        return_audios = torch.gather(scene_expanded, 3, indices_expanded)
+        return_generated_audios = torch.gather(generated_scene_expanded, 3, indices_expanded)
 
-        # 4. Vectorized instance normalization
         # To preserve ITD and ILD, normalize jointly across channels and time.
         # Calculate mean and std over the last two dimensions (C, L).
-        mean = return_audios.mean(dim=(-2, -1), keepdim=True)
-        std = return_audios.std(dim=(-2, -1), keepdim=True)
-        normalized_audios = (return_audios - mean) / (std + 1e-5) # Add epsilon for stability
+        mean = return_generated_audios.mean(dim=(-2, -1), keepdim=True)
+        std = return_generated_audios.std(dim=(-2, -1), keepdim=True)
+        normalized_generated_audios = (return_generated_audios - mean) / (std + 1e-5) # Add epsilon for stability
 
-        # 5. Flatten, shuffle, and handle masks
+
+        clean_scene_expanded = clean_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+
+        return_clean_audios = torch.gather(clean_scene_expanded, 3, indices_expanded)
+
+        mean = return_clean_audios.mean(dim=(-2, -1), keepdim=True)
+        std = return_clean_audios.std(dim=(-2, -1), keepdim=True)
+        normalized_clean_audios = (return_clean_audios - mean) / (std + 1e-5) # Add epsilon for stability
+
         # Cast to bfloat16 and flatten batch and samples dimensions
-        flattened = self.collate_fn(normalized_audios.to(torch.bfloat16))
+        flattened_generated = self.collate_fn(normalized_generated_audios.to(torch.bfloat16))
+        flattened_clean = self.collate_fn(normalized_clean_audios.to(torch.bfloat16))
 
         # Shuffle the samples
-        idx = torch.randperm(flattened.size(0))
+        idx = torch.randperm(flattened_generated.size(0))
 
-        return flattened[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
+        return flattened_generated[idx, ...], flattened_clean[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> ForwardReturn:
-        audio_input, ctx_masks, target_indices, ctx_and_target_masks = batch
-        out = self(audio_input,ctx_masks, target_indices, ctx_and_target_masks)
+        generated_scene, clean_scene, ctx_masks, target_indices, ctx_and_target_masks = batch
+        out = self(generated_scene, clean_scene, ctx_masks, target_indices, ctx_and_target_masks)
 
         # Enhanced logging
         log_data = {
@@ -526,7 +546,7 @@ class JEPA(pl.LightningModule):
         return total_loss / (indices_count + 1e-8)
     
 
-    def forward(self, audio : torch.Tensor, ctx_masks, target_indices, ctx_and_target_masks) -> ForwardReturn:
+    def forward(self, generated_scene: torch.Tensor, clean_scene : torch.Tensor, ctx_masks, target_indices, ctx_and_target_masks) -> ForwardReturn:
         """
         Args:
             batch: torch.Tensor
@@ -552,13 +572,14 @@ class JEPA(pl.LightningModule):
         """
         # # Compute the local representations from the waveform
         # This extract audio can be also channel based, if it is channel based the channel are flatten to the sequencel length
-        local_features = self.extract_audio(audio)
-        local_features = self.feature_norms(local_features)
+        local_features_generated = self.extract_audio(generated_scene)
+        local_features_generated = self.feature_norms(local_features_generated)
         if self.post_extraction_mapper is not None:
-            local_features = self.post_extraction_mapper(local_features)
+            local_features_generated = self.post_extraction_mapper(local_features_generated)
         
-        local_features = local_features + self.pos_encoding_encoder
-        contextual_features = self.encoder_forward(local_features, src_key_padding_mask=ctx_masks)
+        local_features_generated = local_features_generated + self.pos_encoding_encoder
+
+        contextual_features = self.encoder_forward(local_features_generated, src_key_padding_mask=ctx_masks)
         # Accumulate contextual features on the batch dimensions
         contextual_features = contextual_features[~ctx_masks]
         contextual_features = self.encoder_to_decoder_mapper(contextual_features)
@@ -566,13 +587,20 @@ class JEPA(pl.LightningModule):
         preds = self.decoder_forward(contextual_features, ctx_masks, nr_targets = target_indices.shape[1], src_key_padding_mask=ctx_and_target_masks)
         
         # Compute the training targets using the teacher.
-        x_targets = local_features.detach()
-        targets = self._forward_teacher(x_targets)
+        local_features_clean = self.extract_audio(clean_scene)
+        local_features_clean = self.feature_norms(local_features_clean)
+        if self.post_extraction_mapper is not None:
+            local_features_clean = self.post_extraction_mapper(local_features_clean)
+        
+        local_features_clean = local_features_clean + self.pos_encoding_encoder
+        local_features_clean = local_features_clean.detach()
+        targets = self._forward_teacher(local_features_clean)
 
         loss = self.masked_loss(preds, targets, target_indices)
         
         return ForwardReturn(
-            local_features=local_features,
+            local_features_clean=local_features_clean,
+            local_features_generated=local_features_generated,
             contextual_features=contextual_features,
             loss=loss,
             preds=preds,

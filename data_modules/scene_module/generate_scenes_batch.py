@@ -6,7 +6,7 @@ from typing import List
 
 import torch
 import torchaudio
-import torch.nn.functional as F
+import torchaudio.functional as F
 
 
 def convolve_with_rir(waveform: torch.Tensor, rir: torch.Tensor) -> torch.Tensor:
@@ -73,8 +73,7 @@ def aggregate_noise(noise_rirs, noise_source):
 def process_audio(source_rir : torch.Tensor, 
     noise_rirs: List[torch.Tensor], 
     audio_source: torch.Tensor, 
-    noise_source: torch.Tensor, 
-    sr : int):
+    noise_source: torch.Tensor):
     """Facade function for processing the audio and noise sources with their corresponding RIRs
     Arguments
     ---------
@@ -109,24 +108,31 @@ def process_audio(source_rir : torch.Tensor,
     return convolved_source, agg_noise
 
 
-def generate_scene(source_rir, noise_rirs, source, noise, snr, sr):
+def generate_scene(source_rir, source, noise, snr):
     # Case 1: Both source RIR and noise exist
     if source_rir[0] is not None and noise[0] is not None:
-        source, noise = process_audio(
-            source_rir, noise_rirs, audio_source=source, noise_source=noise, sr=sr
-        )
-        return F.add_noise(source, noise, snr)
+        assert noise.ndim == 2
+        assert source.ndim == 2
+        assert snr.ndim == 1, f"Got snr dim {snr.shape}"
+        source = F.add_noise(source, noise, snr)
+        # We get the first channel of the ambisonics RIRs
+        convolved_source = convolve_with_rir(source, source_rir[:, [0], :])
+        return convolved_source
 
     # Case 2: Only source RIR exists (no noise)
     elif source_rir[0] is not None and noise[0] is None:
-        convolved_source = convolve_with_rir(source, source_rir)
+        # Get the firt
+        assert source.ndim == 2
+        convolved_source = convolve_with_rir(source, source_rir[:, [0], :])
         return convolved_source
-    
+
     # Case 3: Only noise exists (no source RIR)
     elif source_rir[0] is None and noise[0] is not None:
-        # Need to decide: add noise to raw source or skip noise?
-        return F.add_noise(source, noise, snr).unsqueeze(1)  # or just return source
-    
+        # Add channel dim
+        assert source.ndim == 2
+        assert noise.ndim == 2
+        return F.add_noise(source, noise, snr)
+
     # Case 4: Neither source RIR nor noise exists, return one channel audio
     else:  # source_rir[0] is None and noise[0] is None
-        return source.unsqueeze(1)
+        return source

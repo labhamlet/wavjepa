@@ -11,15 +11,18 @@ from utils import get_identity_from_cfg
 from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
+from wavjepa.denoiser import Denoiser
+
 from wavjepa.masking import RandomClusterMaskMaker, RandomMaskMaker, TimeInverseBlockMasker, MultiBlockMaskMaker
 from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
-
+import wavjepa 
+import sys 
+sys.modules['sjepa'] = wavjepa
 
 ORIGINAL_SR = 32000
 
 # Component registries
-NETWORKS = {"JEPA": JEPA}
 MASKERS = {"random-masker": RandomMaskMaker, 'random-cluster-masker': RandomClusterMaskMaker, 'time-inverse-masker' : TimeInverseBlockMasker, 'multi-block-masker': MultiBlockMaskMaker}
 EXTRACTORS = {"spatial-conv-extractor": ConvFeatureExtractor, 
               "conv-extractor": ConvFeatureExtractor}
@@ -119,33 +122,21 @@ class ComponentFactory:
     @staticmethod
     def create_network(cfg, extractor : Extractor) -> JEPA:
         """Create and configure the main network."""
-        network_class = NETWORKS.get(cfg.model)
-        if network_class is None:
-            raise ValueError(
-                f"Unknown network type: {cfg.model}. "
-                f"Available networks: {list(NETWORKS.keys())}"
-            )
-        
+
         try:
-            return network_class(
+            return Denoiser(
                 feature_extractor=extractor,
                 transformer_encoder_cfg = TransformerEncoderCFG.create(), 
                 transformer_encoder_layers_cfg = TransformerLayerCFG.create(),
-                transformer_decoder_cfg = TransformerEncoderCFG.create(), 
-                transformer_decoder_layers_cfg = TransformerLayerCFG.create(d_model = 384),
                 lr=cfg.optimizer.lr,
                 adam_betas=(cfg.optimizer.b1, cfg.optimizer.b2),
                 adam_weight_decay=cfg.optimizer.weight_decay,
                 in_channels=cfg.data.in_channels,
                 resample_sr=cfg.data.sr,
                 process_audio_seconds=cfg.data.process_seconds,
-                use_gradient_checkpointing =cfg.trainer.use_gradient_checkpointing,
                 nr_samples_per_audio=cfg.data.samples_per_audio,
-                compile_modules = cfg.trainer.compile_modules,
-                average_top_k_layers = cfg.trainer.average_top_k_layers,
-                is_spectrogram = cfg.extractor.name == "spectrogram",
-                clean_data_ratio = cfg.data.get("clean_data_ratio", 0.0),
-                size = cfg.trainer.get("size", "base")
+                size = cfg.trainer.get("size", "base"),
+                alpha=cfg.trainer.alpha
             )
         except Exception as e:
             raise RuntimeError(f"Failed to create network instance: {str(e)}")
@@ -155,7 +146,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa_real/",
+        f"{cfg.save_dir}/tb_logs_jepa_denoised_l2/",
         name=identity.replace("_", "/"),
     )
 
@@ -165,10 +156,10 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_real/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised_l2/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
-        every_n_train_steps=25000,
+        every_n_train_steps=2500,
         save_last=True,
         enable_version_counter=True,
         save_top_k=-1,
@@ -195,9 +186,9 @@ def setup_trainer(cfg, logger, callbacks) -> pl.Trainer:
         num_nodes=1,
         use_distributed_sampler=False,
         devices=num_gpus,
-        gradient_clip_val=5,
+        gradient_clip_val=1.0,
         gradient_clip_algorithm = "norm",
-        strategy="ddp" if num_gpus > 1 else "auto",
+        strategy='ddp_find_unused_parameters_true' if num_gpus > 1 else "auto",
     )
 
 
@@ -249,7 +240,7 @@ def cleanup_memory():
     torch.cuda.empty_cache()
 
 
-@hydra.main(version_base=None, config_path="./configs", config_name="base")
+@hydra.main(version_base=None, config_path="./configs", config_name="denoise")
 def main(cfg):
     """Main training function."""
     try:
@@ -266,9 +257,29 @@ def main(cfg):
         data_module = create_data_module(cfg, patches)
         # Print training information
         print_training_info(cfg)
-        
+
+        #Load WavJEPA-Clean weights.
+        weights = torch.load(cfg.trainer.teacher_ckpt_weights, weights_only=False)
+        new_state_dict = {}
+        for key, value in weights["state_dict"].items():
+            if key.startswith("extract_audio._orig_mod"):
+                new_key = key.replace("extract_audio._orig_mod", "extract_audio")
+                new_state_dict[new_key] = value
+            elif key.startswith("encoder._orig_mod"):
+                new_key = key.replace("encoder._orig_mod", "encoder")
+                new_state_dict[new_key] = value
+            elif key.startswith("decoder._orig_mod"):
+                new_key = key.replace("decoder._orig_mod", "decoder")
+                new_state_dict[new_key] = value
+            else:
+                new_state_dict[key] = value
+
+        model.load_state_dict(new_state_dict, strict=False)
+        model._set_teacher(cfg.trainer.teacher_ckpt_weights)            
+        model._compile()
+
         # Start training
-        trainer.fit(model, data_module, ckpt_path=None)
+        trainer.fit(model, data_module, ckpt_path=cfg.ckpt_path if "ckpt_path" in cfg else None)
         
     except Exception as e:
         print(f"Training failed with error: {str(e)}")

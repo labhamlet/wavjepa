@@ -1,0 +1,12 @@
+epochs: -1
+batch_size: 32
+accelerator: gpu
+steps: 25000
+precision: bf16-mixed
+use_gradient_checkpointing: False
+compile_modules: True
+num_gpus : 2
+size : base
+average_top_k_layers : 8
+alpha : 0.8
+teacher_ckpt_weights : /gpfs/work5/0/prjs1261/wavjepa_base_final/step=375000.ckpt

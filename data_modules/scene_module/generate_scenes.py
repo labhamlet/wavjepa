@@ -31,7 +31,7 @@ def apply_fadein(audio: torch.Tensor, sr: int, duration: float = 0.20) -> torch.
     start = 0
     # compute fade in curve
     # linear fade
-    fade_curve = torch.linspace(0.0, 1.0, end)
+    fade_curve = torch.linspace(0.0, 1.0, end, device = audio.device)
     # apply the curve
     audio[start:end] = audio[start:end] * fade_curve
     return audio
@@ -59,7 +59,7 @@ def apply_fadeout(audio: torch.Tensor, sr: int, duration: float = 0.20) -> torch
     start = end - length
     # compute fade out curve
     # linear fade
-    fade_curve = torch.linspace(1.0, 0.0, length)
+    fade_curve = torch.linspace(1.0, 0.0, length, device=audio.device)
     # apply the curve
     audio[start:end] = audio[start:end] * fade_curve
     return audio
@@ -209,7 +209,7 @@ def add_noise(
     return waveform + scaled_noise  # (*, L)
 
 
-def fade_noise(noise_source: torch.Tensor, audio_source: torch.Tensor, sr: int):
+def fade_noise(noise_real_length: int, noise_source: torch.Tensor, audio_source: torch.Tensor, sr: int):
     """Facade function to determine what kind of fade-in and fade-out we should apply to the noise
     Arguments
     ---------
@@ -220,7 +220,8 @@ def fade_noise(noise_source: torch.Tensor, audio_source: torch.Tensor, sr: int):
     sr : int 
         The sampling rate for both audio_source and noise_source
     """
-    if noise_source.shape[-1] > audio_source.shape[-1]:
+
+    if noise_real_length > audio_source.shape[-1]:
         # If audio is longer than the noise, just cut the noise to the audio length
         # Because we cut the noise like that, apply a fadeout!
         noise_source = noise_source[: audio_source.shape[-1]]

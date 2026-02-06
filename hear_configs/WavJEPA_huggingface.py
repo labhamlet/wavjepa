@@ -26,14 +26,14 @@ def load_model(*args, **kwargs):
 
 def get_scene_embeddings(audio, model):
     extracted = extractor(audio, return_tensors="pt")
-    log_mel = extracted["input_values"]
-    x, ts = model(log_mel)
+    latents = extracted["input_values"]
+    x, _ = model(latents)
     x = torch.mean(x, dim=1)
     return x
 
 
 def get_timestamp_embeddings(audio, model):
     extracted = extractor(audio, return_tensors="pt")
-    log_mel = extracted["input_values"]
-    x, ts = model(log_mel, strategy="raw")
+    latents = extracted["input_values"]
+    x, ts = model(latents)
     return x, ts
