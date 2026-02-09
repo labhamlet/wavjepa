@@ -53,89 +53,8 @@ from heareval.score import (
 
 TASK_SPECIFIC_PARAM_GRID = {
     "dcase2016_task2": {
-        # sed_eval is very slow
-        "check_val_every_n_epoch": [10],
-    },
-    "tau2018_ov1": {
-        # sed_eval is very slow
-        "check_val_every_n_epoch": [10],
-    },
-    "tau2018_ov2": {
-        # sed_eval is very slow
-        "check_val_every_n_epoch": [10],
-    },
-    "tau2018_ov3": {
-        # sed_eval is very slow
-        "check_val_every_n_epoch": [10],
-    },
-    "tau2019": {
-        # sed_eval is very slow
-        "check_val_every_n_epoch": [10],
-    },
-    "tau2020": {
-        # sed_eval is very slow
-        "check_val_every_n_epoch": [10],
-    },
-    "tau2021": {
-        # sed_eval is very slow
-        "check_val_every_n_epoch": [10],
-    },
-    "starss23": {
-        # sed_eval is very slow
-        "check_val_every_n_epoch": [10],
-    },
-    "tau2018_ov1_split1": {
-        "check_val_every_n_epoch": [25],
-        "patience": [3],
-    },    
-    "tau2018_ov1_split8": {
-        "check_val_every_n_epoch": [25],
-        "patience": [3],
-    },    
-    "tau2018_ov1_split9": {
-        "check_val_every_n_epoch": [25],
-        "patience": [3],
-    },
-    "tau2018_ov2_split1": {
-        "check_val_every_n_epoch": [25],
-        "patience": [3],
-    },    
-    "tau2018_ov2_split8": {
-        "check_val_every_n_epoch": [25],
-        "patience": [3],
-    },    
-    "tau2018_ov2_split9": {
-        "check_val_every_n_epoch": [25],
-        "patience": [3],
-    },
-    "tau2018_ov3_split1": {
-        "check_val_every_n_epoch": [25],
-        "patience": [3],
-    },    
-    "tau2018_ov3_split8": {
-        "check_val_every_n_epoch": [25],
-        "patience": [3],
-    },    
-    "tau2018_ov3_split9": {
-        "check_val_every_n_epoch": [25],
-        "patience": [3],
-    },
-    # "tau2019": {
-    #     "check_val_every_n_epoch": [25],
-    #     "patience": [3],
-    # },
-    # "tau2020": {
-    #     "check_val_every_n_epoch": [25],
-    #     "patience": [3],
-    # },
-    # "tau2021": {
-    #     "check_val_every_n_epoch": [24],
-    #     "patience": [3],
-    # },
-    # "starss23": {
-    #     "check_val_every_n_epoch": [25],
-    #     "patience": [3],
-    # },
+        "check_val_every_n_epoch": [10]
+    }
 }
 
 PARAM_GRID = {
@@ -181,7 +100,7 @@ FAST_PARAM_GRID = copy.deepcopy(PARAM_GRID)
 FAST_PARAM_GRID.update(
     {
         "max_epochs": [50],
-        "check_val_every_n_epoch": [1],
+        "check_val_every_n_epoch": [10],
     }
 )
 
@@ -195,6 +114,7 @@ FASTER_PARAM_GRID.update(
         "check_val_every_n_epoch": [1],
     }
 )
+
 
 # These are good for dcase, change for other event-based secret tasks
 EVENT_POSTPROCESSING_GRID = {
@@ -643,7 +563,6 @@ class ACCDOAPredictionModel(AbstractPredictionModel):
         self, epoch: int
     ) -> Tuple[Tuple[str, Any], ...]:
         return []
-
 
 class EventPredictionModel(AbstractPredictionModel):
     """

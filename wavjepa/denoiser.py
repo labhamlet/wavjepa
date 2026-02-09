@@ -368,7 +368,9 @@ class Denoiser(pl.LightningModule):
         #Add channel dimension to the final audio as well.
         if final_audio.ndim != 3:
             final_audio = final_audio.unsqueeze(1)
-
+        if generated_scene.ndim != 3:
+            generated_scene = generated_scene.unsqueeze(1)
+        
         assert generated_scene.ndim == final_audio.ndim
 
 

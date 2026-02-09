@@ -10,6 +10,44 @@ from typing import List
 import torch.nn.functional as F
 
 
+def fade_in(audio, sr, duration = 0.2):
+    end = int(duration * sr)
+    start = 0
+    fade_curve = torch.linspace(0.0, 1.0, end, device = audio.device)
+    audio[start:end] = audio[start:end] * fade_curve
+    return audio
+
+def loop(audio, sr, target_length):
+    assert audio.ndim == 1, "Audio has channel dimension, collapse this before using looping"
+    audio_length = audio.shape[-1]
+    new_audio = torch.zeros(target_length, device=audio.device)
+    looping = target_length - audio_length
+    #Get the first n_time points to loop the audio.
+    new_audio[:audio_length] = audio 
+    new_audio[audio_length:] = fade_in(audio[:looping], sr, duration= 0.2)
+    return new_audio
+
+def randomly_select_pad_or_loop(
+    audio : torch.Tensor, 
+    target_length: int,
+    sr : int,
+
+    ) -> torch.Tensor:
+    audio_length = audio.shape[-1]
+    padding = target_length - audio_length
+    needed_seconds = padding // sr 
+
+    if needed_seconds >= 0.5:
+        audio = loop(audio, sr, target_length)
+    elif needed_seconds <= 0.5 and needed_seconds >= 0.0:
+        audio = F.pad(audio, (0, padding), "constant", 0)
+    elif needed_seconds <= 0:  # select a random 10 seconds.
+        rand_index = torch.randint(0, audio_length - target_length, (1,))
+        audio = audio[rand_index : rand_index + target_length]
+    else:
+        audio = audio
+    assert audio.shape[-1] == target_length
+    return audio
 
 
 def pad_or_randomly_select(
