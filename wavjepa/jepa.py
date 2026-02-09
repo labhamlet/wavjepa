@@ -2,28 +2,23 @@ import copy
 import transformers 
 import numpy as np 
 
-from typing import List, Any, Optional, Tuple
+from typing import List, Any, Optional
 
 import torch
 import torchaudio
-import random
 from torch import nn
 from einops import repeat, rearrange
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 import pytorch_lightning as pl
 
-
 from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_pos_embed, get_binaural_pos_embed
 
 from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
-from data_modules.scene_module import generate_scenes_batch, generate_scenes
-from data_modules.dataset_functions import pad_or_truncate_batch, normalize_audio_batch, normalize_audio
+from data_modules.dataset_functions import normalize_audio_batch, pad_or_truncate_batch
 
-ORIGINAL_SR=32000
-#Think about using weight decay from 0.04 to 0.4?
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
 
 def collate_fn(batch : List[torch.Tensor]) -> torch.Tensor:
@@ -57,7 +52,7 @@ def loop(audio, sr, target_length):
     new_audio[audio_length:] = fade_in(audio[:looping], sr, duration= 0.2)
     return new_audio
 
-def randomly_select_pad_or_loop(
+def pad_random_select_or_loop(
     audio : torch.Tensor, 
     target_length: int,
     sr : int,
@@ -157,18 +152,19 @@ class JEPA(pl.LightningModule):
         **kwargs : dict[str, Any],
     ):
         super().__init__(**kwargs)
-        self.resampler_48k = torchaudio.transforms.Resample(48000, ORIGINAL_SR).to(
+    
+        self.sr = resample_sr 
+        self.resampler_48k = torchaudio.transforms.Resample(48000, self.sr).to(
             self.device
         )
-        self.resampler_44k = torchaudio.transforms.Resample(44100, ORIGINAL_SR).to(
+        self.resampler_44k = torchaudio.transforms.Resample(44100, self.sr).to(
             self.device
         )
         self.valid_len_44k = int(self.TARGET_SECONDS * 44100)
         self.valid_len_16k = int(self.TARGET_SECONDS * 16000)
-        self.target_audio_length = self.TARGET_SECONDS * ORIGINAL_SR
+        self.target_audio_length = self.TARGET_SECONDS * self.sr
         self.clean_data_ratio = clean_data_ratio
 
-        self.sr = resample_sr 
         self.is_spectrogram = is_spectrogram
         self.nr_samples_per_audio = nr_samples_per_audio
         self.ema_end_step = ema_anneal_end_step
@@ -218,11 +214,9 @@ class JEPA(pl.LightningModule):
         self._init_teacher()
         if compile_modules:
             self._compile_operations()
-            self.pad_or_truncate_batch = torch.compile(pad_or_truncate_batch)
             self.collate_fn = torch.compile(collate_fn)
             self.resample = torch.compile(resample) 
         else:
-            self.pad_or_truncate_batch = pad_or_truncate_batch
             self.collate_fn = collate_fn
             self.resample = resample
 
@@ -383,7 +377,7 @@ class JEPA(pl.LightningModule):
         (
             audio_batch,
             sr_batch,
-            snr,
+            audio_lengths,
             ctx_masks,
             target_indices,
             ctx_and_target_masks,
@@ -403,32 +397,43 @@ class JEPA(pl.LightningModule):
             dtype=audio_batch.dtype,
         )
 
+        #Resample to 16k here. 
         if mask_48k.any():
-            audio = normalize_audio_batch(audio_batch[mask_48k])
-            final_audio[mask_48k] = self.resampler_48k(audio)
+            selected_audios = audio_batch[mask_48k][..., :audio_lengths]
+            normalized_audio = normalize_audio_batch(selected_audios)
+            target_length = int(48000 * self.target_audio_length)
+            selected_audios = pad_random_select_or_loop(normalized_audio,
+                                                        target_length=target_length,
+                                                        sr = 48000)
+            final_audio[mask_48k] = self.resampler_48k(selected_audios)
         if mask_16k.any():
-            # If audio was 32khz we had lots of padding to match 10 seconds od 48kHz,
-            # Remove that padding.
-            audio = normalize_audio_batch(
-                audio_batch[mask_16k][..., :self.valid_len_16k]
-            )
-            final_audio[mask_16k] = audio
+            # If audio was 16khz we had lots of padding to match 10 seconds od 48kHz,
+            # Remove that padding and select the first 10 seconds. We already selected a random 10 second 
+            selected_audios = audio_batch[mask_16k][..., :audio_lengths]
+            normalized_audio = normalize_audio_batch(selected_audios)
+            target_length = int(16000 * self.target_audio_length)
+            selected_audios = pad_random_select_or_loop(normalized_audio,
+                                                        target_length=target_length,
+                                                        sr = 16000)
+
+            final_audio[mask_16k] = selected_audios
         if mask_44k.any():
             # If audio was 44.1khz we had lots of padding to match 10 seconds od 48kHz,
             # Remove that padding.
-            audio = normalize_audio_batch(
-                audio_batch[mask_44k][..., : self.valid_len_44k]
-            )
-            final_audio[mask_44k] = self.resampler_44k(audio)
+            selected_audios = audio_batch[mask_16k][..., :audio_lengths]
+            normalized_audio = normalize_audio_batch(selected_audios)
+            target_length = int(44100 * self.target_audio_length)
+            selected_audios = pad_random_select_or_loop(normalized_audio,
+                                                        target_length=target_length,
+                                                        sr = 44100)
+            final_audio[mask_44k] = self.resampler_44k(selected_audios)
 
         #Add channel dimension to the final audio as well.
         if final_audio.ndim != 3:
             final_audio = final_audio.unsqueeze(1)
 
-        clean_scene = self.resample(final_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
-        clean_audio = self.pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
-
-        
+        #Make sure that they are 10 seconds.    
+        clean_audio = pad_or_truncate_batch(final_audio, 10 * self.sr)
         B, C, L_full = clean_audio.shape
 
         # Generate all random start indices at once
@@ -443,7 +448,7 @@ class JEPA(pl.LightningModule):
         indices = rand_starts.unsqueeze(-1) + torch.arange(self.target_length, device=self.device)
         indices_expanded = indices.unsqueeze(2).expand(-1, -1, C, -1)
 
-        clean_scene_expanded = clean_scene.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+        clean_scene_expanded = clean_audio.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
 
         return_clean_audios = torch.gather(clean_scene_expanded, 3, indices_expanded)
 
