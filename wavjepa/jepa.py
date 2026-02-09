@@ -363,7 +363,7 @@ class JEPA(pl.LightningModule):
             # If audio was 32khz we had lots of padding to match 10 seconds od 48kHz,
             # Remove that padding.
             audio = normalize_audio_batch(
-                audio_batch[mask_16k][..., : self.valid_len_32k]
+                audio_batch[mask_16k][..., : self.valid_len_16k]
             )
             final_audio[mask_16k] = audio
         if mask_44k.any():
