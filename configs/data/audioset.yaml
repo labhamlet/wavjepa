@@ -6,9 +6,4 @@ sr: 16000
 in_channels: 1
 samples_per_audio: 8
 process_seconds : 2.01
-clean_data_ratio : 0.8
-with_noise : True
-with_rir : True
-snr_low : 5
-snr_high : 40
 name : NaturalisticAudioSet

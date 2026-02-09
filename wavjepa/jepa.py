@@ -18,7 +18,7 @@ from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
 from data_modules.dataset_functions import normalize_audio_batch, pad_or_truncate_batch
-from wavjepa.utils import pad_random_select_or_loop
+from wavjepa.utils import pad_random_select_or_loop_batch
 
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
 
@@ -110,29 +110,21 @@ class JEPA(pl.LightningModule):
         use_gradient_checkpointing: bool = False,
         compile_modules : bool = False,
         is_spectrogram : bool = True,
-        clean_data_ratio : float = 0.0,
         size : str = "base",
         **kwargs : dict[str, Any],
     ):
         super().__init__(**kwargs)
     
-        self.sr = resample_sr 
         self.resampler_48k = torchaudio.transforms.Resample(48000, self.sr).to(
             self.device
         )
         self.resampler_44k = torchaudio.transforms.Resample(44100, self.sr).to(
             self.device
         )
-
-        # Process each sample rate group
-        self.sr_configs = [
-            (48000, self.resampler_48k),
-            (44100, self.resampler_44k),
-            (16000, None),  # No resampling needed for 16kHz
-        ]
-
+        self.valid_len_44k = int(self.TARGET_SECONDS * 44100)
+        self.valid_len_16k = int(self.TARGET_SECONDS * 16000)
         self.target_audio_length = self.TARGET_SECONDS * self.sr
-        self.clean_data_ratio = clean_data_ratio
+
 
         self.is_spectrogram = is_spectrogram
         self.nr_samples_per_audio = nr_samples_per_audio
@@ -342,11 +334,10 @@ class JEPA(pl.LightningModule):
         """
         Runs on GPU. Splits batch by SR, resamples, recombines.
         """
-        # Unpack batch (Audio is all 480,000 length here, and noise is 320,000)
+        # Unpack batch (Audio is all 480,000)
         (
             audio_batch,
             sr_batch,
-            audio_lengths,
             ctx_masks,
             target_indices,
             ctx_and_target_masks,
@@ -354,6 +345,10 @@ class JEPA(pl.LightningModule):
 
 
         batch_size = audio_batch.shape[0]
+        # 2. RESAMPLE AUDIO (Vectorized)
+        mask_48k = sr_batch == 48000
+        mask_44k = sr_batch == 44100
+        mask_16k = sr_batch == 16000  # resampled librispeech
 
         final_audio = torch.zeros(
             (batch_size, self.target_audio_length),
@@ -361,38 +356,23 @@ class JEPA(pl.LightningModule):
             dtype=audio_batch.dtype,
         )
 
-        # Process each sample rate group
-        for sr, resampler in self.sr_configs:
-            mask = sr_batch == sr
-
-            #No sr found with this mask
-            if not mask.any():
-                continue
-            
-            indices = torch.where(mask)[0]
-            processed_samples = []
-            
-            for idx in indices:
-                # Get exact length for this sample
-                exact_length = audio_lengths[idx].item()
-                audio_sample = audio_batch[idx, :exact_length]
-                
-                # Normalize
-                normalized = normalize_audio_batch(audio_sample.unsqueeze(0)).squeeze(0)
-                
-                # Pad/select to target length
-                target_length = int(sr * self.TARGET_SECONDS)
-                processed = pad_random_select_or_loop(
-                    normalized, target_length, sr
-                )
-                
-                processed_samples.append(processed)
-            
-            # Stack and optionally resample
-            stacked = torch.stack(processed_samples)
-            audio_to_put = resampler(stacked) if resampler else stacked
-            final_audio[mask] = pad_or_truncate_batch(audio_to_put, self.target_audio_length)
-
+        if mask_48k.any():
+            audio = normalize_audio_batch(audio_batch[mask_48k])
+            final_audio[mask_48k] = self.resampler_48k(audio)
+        if mask_16k.any():
+            # If audio was 32khz we had lots of padding to match 10 seconds od 48kHz,
+            # Remove that padding.
+            audio = normalize_audio_batch(
+                audio_batch[mask_16k][..., : self.valid_len_32k]
+            )
+            final_audio[mask_16k] = audio
+        if mask_44k.any():
+            # If audio was 44.1khz we had lots of padding to match 10 seconds od 48kHz,
+            # Remove that padding.
+            audio = normalize_audio_batch(
+                audio_batch[mask_44k][..., : self.valid_len_44k]
+            )
+            final_audio[mask_44k] = self.resampler_44k(audio)
 
         #Add channel dimension to the final audio as well.
         if final_audio.ndim != 3:

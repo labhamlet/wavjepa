@@ -64,13 +64,15 @@ class WebAudioDataModule(pl.LightningDataModule):
         """
 
         audio, audio_sr = sample[0]
-        audio = audio[0]  # Take the left channel if it is stereo audio
-        audio_length = audio.shape[-1]
 
-        #Pad or randomly select depending on the target_length.
-
-        #We will get more than 10 seconds of the librispeech audio, or audioset 44.1kHz audio here
-        #But we deal with this later in the WavJEPA on_after_batch_transfer.
+        if audio.ndim == 2 and (audio.shape[0] < audio.shape[1]):
+            audio = audio[0]  # Take the left channel if it is stereo audio
+        elif audio.ndim == 2 and (audio.shape[0] >= audio.shape[1]):
+            audio = audio.T
+            audio = audio[0]  # Take the left channel if it is stereo audio
+        else:
+            audio = audio
+            
         audio = pad_or_randomly_select(audio, self.audio_target_length)
 
         context_mask, target_indices, ctx_and_target_masks = self.masker(
@@ -82,7 +84,6 @@ class WebAudioDataModule(pl.LightningDataModule):
         return (
             audio,
             audio_sr,
-            audio_length,
             context_mask,
             target_indices,
             ctx_and_target_masks,

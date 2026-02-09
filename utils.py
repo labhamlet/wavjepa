@@ -1,16 +1,5 @@
 def get_identity_from_cfg(cfg):
-    identity = "InChannels={}_WithNoise={}_WithRIR={}_SNRl={}_SNRh={}_CleanRatio={}_".format(
-        cfg.data.get("in_channels", None),
-        cfg.data.with_noise,
-        cfg.data.with_rir,
-        cfg.data.snr_low,
-        cfg.data.snr_high,
-        cfg.data.clean_data_ratio
-    )
-    identity += "SR={}_alpha={}_".format(
-        cfg.data.sr,
-        cfg.trainer.get("alpha")
-    )
+    identity = f"SR={cfg.data.sr}_"
     identity += "BatchSize={}_NrSamples={}_NrGPUs={}_ModelSize={}_LR={}_".format(
         cfg.trainer.get("batch_size"),
         cfg.data.get("samples_per_audio"),

@@ -137,28 +137,29 @@ def loop(audio, sr, target_length):
     assert audio.ndim == 1, "Audio has channel dimension, collapse this before using looping"
     audio_length = audio.shape[-1]
     
-    looped_audio = torch.empty(0, device = audio.device)
-    #Add audio to the looped_audio
-    looped_audio = torch.cat([looped_audio, audio])
-    while looped_audio.shape[-1] < target_length:
-        remaining = target_length - looped_audio.shape[-1] 
+    max_loops = (target_length // audio_length) + 1
+    looped_audio = torch.zeros(target_length, device=audio.device, dtype=audio.dtype)
+    
+    # Copy first audio (no fade-in)
+    looped_audio[:audio_length] = audio
+    
+    # Loop for additional copies
+    for i in range(1, max_loops):
+        current_pos = i * audio_length
+        remaining = target_length - current_pos
         remaining_seconds = remaining / sr
         
         if remaining_seconds >= 0.5:
-            next_chunk = fade_in(
-                audio, sr, duration=0.2
-            )
-            # If this chunk exceeds target, cut and fade out
-            if looped_audio.shape[-1] + audio_length > target_length:
-                next_chunk = next_chunk[:remaining]
-                next_chunk = fade_out(next_chunk, sr, duration=0.2)
+            chunk = audio.clone()
+            chunk = fade_in(chunk, sr, duration=0.2)
+            copy_length = min(audio_length, remaining)
             
-            # Add looped to 
-            looped_audio = torch.cat([looped_audio, next_chunk])
+            if copy_length < audio_length:
+                chunk[:copy_length] = fade_out(chunk[:copy_length], sr, duration=0.2)
+            
+            looped_audio[current_pos:current_pos + copy_length] = chunk[:copy_length]
         else:
-            # Gap is small (<0.5s), pad with silence and stop
-            padding = torch.zeros(remaining, device=audio.device)
-            looped_audio = torch.cat([looped_audio, padding])
+            # Gap < 0.5s, stop (already zero-padded)
             break
     
     return looped_audio
@@ -171,7 +172,7 @@ def pad_random_select_or_loop(
     ) -> torch.Tensor:
     audio_length = audio.shape[-1]
     padding = target_length - audio_length
-    needed_seconds = padding // sr 
+    needed_seconds = padding / sr 
 
     if needed_seconds >= 0.5:
         audio = loop(audio, sr, target_length)

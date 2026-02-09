@@ -16,7 +16,6 @@ from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
 
-ORIGINAL_SR = 32000
 
 # Component registries
 NETWORKS = {"JEPA": JEPA}
@@ -144,7 +143,6 @@ class ComponentFactory:
                 compile_modules = cfg.trainer.compile_modules,
                 average_top_k_layers = cfg.trainer.average_top_k_layers,
                 is_spectrogram = cfg.extractor.name == "spectrogram",
-                clean_data_ratio = cfg.data.get("clean_data_ratio", 0.0),
                 size = cfg.trainer.get("size", "base")
             )
         except Exception as e:
