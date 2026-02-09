@@ -209,18 +209,11 @@ def create_data_module(cfg, nr_patches) -> pl.LightningDataModule:
     return WebAudioDataModule(
         data_dirs=cfg.data.data_dirs,
         mixing_weights=cfg.data.mixing_weights,
-        noise_dir=cfg.data.noise_dir,
-        rir_dir=cfg.data.rir_dir,
         batch_size=cfg.trainer.batch_size,
         masker=masker,
         nr_samples_per_audio=cfg.data.samples_per_audio,
         nr_time_points=nr_patches,
-        with_rir=cfg.data.with_rir,
-        with_noise=cfg.data.with_noise,
-        snr_high=cfg.data.snr_high, 
-        snr_low=cfg.data.snr_low
     )
-
 
 def build_model(cfg) -> torch.nn.Module:
     """Build the complete model with all components."""
