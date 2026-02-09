@@ -1,6 +1,7 @@
 import inspect
 import torch
 from typing import Tuple
+import torch.nn.functional as F
 
 def has_len(v):
     try:
@@ -97,3 +98,89 @@ def repeat_token(token: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
     """
     batch_size, sequence_length = size
     return token.repeat(batch_size, sequence_length, 1)
+
+def fade_in(audio, sr, duration = 0.2):
+    end = int(duration * sr)
+    start = 0
+    fade_curve = torch.linspace(0.0, 1.0, end, device = audio.device)
+    audio[start:end] = audio[start:end] * fade_curve
+    return audio
+
+def fade_out(audio: torch.Tensor, sr: int, duration: float = 0.20) -> torch.Tensor:
+    """Apply fade-out to the audio source.
+
+    Arguments
+    ----------
+    audio : torch.Tensor
+        The audio that we want to fade-out
+    sr : int 
+        Sampling rate of the audio
+    duration : float
+        Duration of the fade-out
+
+    Returns
+    --------
+    torch.Tensor with faded-out audio
+    """
+    # convert to audio indices (samples)
+    length = int(duration * sr)
+    end = audio.shape[0]
+    start = end - length
+    # compute fade out curve
+    # linear fade
+    fade_curve = torch.linspace(1.0, 0.0, length, device=audio.device)
+    # apply the curve
+    audio[start:end] = audio[start:end] * fade_curve
+    return audio
+
+def loop(audio, sr, target_length):
+    assert audio.ndim == 1, "Audio has channel dimension, collapse this before using looping"
+    audio_length = audio.shape[-1]
+    
+    looped_audio = torch.empty(0, device = audio.device)
+    #Add audio to the looped_audio
+    looped_audio = torch.cat([looped_audio, audio])
+    while looped_audio.shape[-1] < target_length:
+        remaining = target_length - looped_audio.shape[-1] 
+        remaining_seconds = remaining / sr
+        
+        if remaining_seconds >= 0.5:
+            next_chunk = fade_in(
+                audio, sr, duration=0.2
+            )
+            # If this chunk exceeds target, cut and fade out
+            if looped_audio.shape[-1] + audio_length > target_length:
+                next_chunk = next_chunk[:remaining]
+                next_chunk = fade_out(next_chunk, sr, duration=0.2)
+            
+            # Add looped to 
+            looped_audio = torch.cat([looped_audio, next_chunk])
+        else:
+            # Gap is small (<0.5s), pad with silence and stop
+            padding = torch.zeros(remaining, device=audio.device)
+            looped_audio = torch.cat([looped_audio, padding])
+            break
+    
+    return looped_audio
+
+def pad_random_select_or_loop(
+    audio : torch.Tensor, 
+    target_length: int,
+    sr : int,
+
+    ) -> torch.Tensor:
+    audio_length = audio.shape[-1]
+    padding = target_length - audio_length
+    needed_seconds = padding // sr 
+
+    if needed_seconds >= 0.5:
+        audio = loop(audio, sr, target_length)
+    elif needed_seconds <= 0.5 and needed_seconds >= 0.0:
+        audio = F.pad(audio, (0, padding), "constant", 0)
+    elif needed_seconds <= 0:  # select a random 10 seconds.
+        rand_index = torch.randint(0, audio_length - target_length, (1,))
+        audio = audio[rand_index : rand_index + target_length]
+    else:
+        audio = audio
+    assert audio.shape[-1] == target_length
+    return audio

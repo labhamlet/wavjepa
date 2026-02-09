@@ -23,56 +23,6 @@ def pad_or_randomly_select(
     assert audio.shape[-1] == target_length
     return audio
 
-def mask_to_indices(mask: torch.BoolTensor, check: bool = False) -> torch.Tensor:
-    """
-    Returns the indices of the true elements.
-
-    Args:
-        mask: (*batch_dims, masked_dim)
-            Boolean mask. For every element, the number of true values in the masked dimension
-            should be the same. i.e. ``mask.sum(dim=-1)`` should be constant.
-        check: bool
-            If ``True``, check that the output is correct. Slower.
-
-    Returns:
-        indices: (*batch_dims, n_unmasked)
-            Indices of the true elements in the mask.
-    """
-
-    n_true = mask.sum(dim=-1).unique()
-    assert n_true.size(0) == 1
-    n_true = int(n_true.item())
-    batch_dims = list(mask.shape[:-1])
-    if check:
-        out = mask.nonzero(as_tuple=False)
-        out = out.view(*batch_dims, n_true, len(batch_dims) + 1)
-        for i, d in enumerate(batch_dims):
-            for j in range(0, d):
-                assert (out[..., i].select(i, j) == j).all()
-        out = out[..., -1]
-    else:
-        *_, out = mask.nonzero(as_tuple=True)
-        out = out.view(*batch_dims, n_true)
-    return out.to(mask.device)
-
-
-# using cluster for frame masking hurts the performance, so just use the naive random sampling
-def gen_maskid_frame_tgt(masked_patches: torch.Tensor, mask_size: int = 100):
-    indices: List[int] = masked_patches.nonzero().flatten().tolist()  # type: ignore
-    mask_id: List[int] = random.sample(indices, mask_size)
-    return torch.tensor(mask_id)
-
-
-# using cluster for frame masking hurts the performance, so just use the naive random sampling
-def gen_maskid_frame(sequence_len: int = 512, mask_size: int = 100) -> torch.Tensor:
-    mask_id = random.sample(range(0, sequence_len), mask_size)
-    return torch.tensor(mask_id)
-
-
-def to_torch(sample):
-    return torch.from_numpy(sample[0])
-
-
 
 class WebAudioDataModule(pl.LightningDataModule):
     AUDIO_SR: int = 48000
@@ -104,7 +54,6 @@ class WebAudioDataModule(pl.LightningDataModule):
 
         self.masker = masker
 
-        self.noise_target_length = self.NOISE_SR * self.TARGET_SECONDS
         self.audio_target_length = self.AUDIO_SR * self.TARGET_SECONDS
 
         self.in_channels = in_channels

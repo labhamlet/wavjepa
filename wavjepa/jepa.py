@@ -18,6 +18,7 @@ from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
 from data_modules.dataset_functions import normalize_audio_batch, pad_or_truncate_batch
+from wavjepa.utils import pad_random_select_or_loop
 
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
 
@@ -35,44 +36,6 @@ def resample(audio: torch.Tensor, resample_sr: int, original_sr = 32000) -> torc
         beta=14.769656459379492,
     )
 
-def fade_in(audio, sr, duration = 0.2):
-    end = int(duration * sr)
-    start = 0
-    fade_curve = torch.linspace(0.0, 1.0, end, device = audio.device)
-    audio[start:end] = audio[start:end] * fade_curve
-    return audio
-
-def loop(audio, sr, target_length):
-    assert audio.ndim == 1, "Audio has channel dimension, collapse this before using looping"
-    audio_length = audio.shape[-1]
-    new_audio = torch.zeros(target_length, device=audio.device)
-    looping = target_length - audio_length
-    #Get the first n_time points to loop the audio.
-    new_audio[:audio_length] = audio 
-    new_audio[audio_length:] = fade_in(audio[:looping], sr, duration= 0.2)
-    return new_audio
-
-def pad_random_select_or_loop(
-    audio : torch.Tensor, 
-    target_length: int,
-    sr : int,
-
-    ) -> torch.Tensor:
-    audio_length = audio.shape[-1]
-    padding = target_length - audio_length
-    needed_seconds = padding // sr 
-
-    if needed_seconds >= 0.5:
-        audio = loop(audio, sr, target_length)
-    elif needed_seconds <= 0.5 and needed_seconds >= 0.0:
-        audio = F.pad(audio, (0, padding), "constant", 0)
-    elif needed_seconds <= 0:  # select a random 10 seconds.
-        rand_index = torch.randint(0, audio_length - target_length, (1,))
-        audio = audio[rand_index : rand_index + target_length]
-    else:
-        audio = audio
-    assert audio.shape[-1] == target_length
-    return audio
 
 class JEPA(pl.LightningModule):
     """
@@ -160,8 +123,14 @@ class JEPA(pl.LightningModule):
         self.resampler_44k = torchaudio.transforms.Resample(44100, self.sr).to(
             self.device
         )
-        self.valid_len_44k = int(self.TARGET_SECONDS * 44100)
-        self.valid_len_16k = int(self.TARGET_SECONDS * 16000)
+
+        # Process each sample rate group
+        self.sr_configs = [
+            (48000, self.resampler_48k),
+            (44100, self.resampler_44k),
+            (16000, None),  # No resampling needed for 16kHz
+        ]
+
         self.target_audio_length = self.TARGET_SECONDS * self.sr
         self.clean_data_ratio = clean_data_ratio
 
@@ -212,7 +181,7 @@ class JEPA(pl.LightningModule):
 
         self.apply(self._init_weights)
         self._init_teacher()
-        if compile_modules:
+        if False:
             self._compile_operations()
             self.collate_fn = torch.compile(collate_fn)
             self.resample = torch.compile(resample) 
@@ -385,11 +354,6 @@ class JEPA(pl.LightningModule):
 
 
         batch_size = audio_batch.shape[0]
-        
-        # 2. RESAMPLE AUDIO (Vectorized)
-        mask_48k = sr_batch == 48000
-        mask_44k = sr_batch == 44100
-        mask_16k = sr_batch == 16000  # librispeech
 
         final_audio = torch.zeros(
             (batch_size, self.target_audio_length),
@@ -397,44 +361,44 @@ class JEPA(pl.LightningModule):
             dtype=audio_batch.dtype,
         )
 
-        #Resample to 16k here. 
-        if mask_48k.any():
-            selected_audios = audio_batch[mask_48k][..., :audio_lengths]
-            normalized_audio = normalize_audio_batch(selected_audios)
-            target_length = int(48000 * self.target_audio_length)
-            selected_audios = pad_random_select_or_loop(normalized_audio,
-                                                        target_length=target_length,
-                                                        sr = 48000)
-            final_audio[mask_48k] = self.resampler_48k(selected_audios)
-        if mask_16k.any():
-            # If audio was 16khz we had lots of padding to match 10 seconds od 48kHz,
-            # Remove that padding and select the first 10 seconds. We already selected a random 10 second 
-            selected_audios = audio_batch[mask_16k][..., :audio_lengths]
-            normalized_audio = normalize_audio_batch(selected_audios)
-            target_length = int(16000 * self.target_audio_length)
-            selected_audios = pad_random_select_or_loop(normalized_audio,
-                                                        target_length=target_length,
-                                                        sr = 16000)
+        # Process each sample rate group
+        for sr, resampler in self.sr_configs:
+            mask = sr_batch == sr
 
-            final_audio[mask_16k] = selected_audios
-        if mask_44k.any():
-            # If audio was 44.1khz we had lots of padding to match 10 seconds od 48kHz,
-            # Remove that padding.
-            selected_audios = audio_batch[mask_16k][..., :audio_lengths]
-            normalized_audio = normalize_audio_batch(selected_audios)
-            target_length = int(44100 * self.target_audio_length)
-            selected_audios = pad_random_select_or_loop(normalized_audio,
-                                                        target_length=target_length,
-                                                        sr = 44100)
-            final_audio[mask_44k] = self.resampler_44k(selected_audios)
+            #No sr found with this mask
+            if not mask.any():
+                continue
+            
+            indices = torch.where(mask)[0]
+            processed_samples = []
+            
+            for idx in indices:
+                # Get exact length for this sample
+                exact_length = audio_lengths[idx].item()
+                audio_sample = audio_batch[idx, :exact_length]
+                
+                # Normalize
+                normalized = normalize_audio_batch(audio_sample.unsqueeze(0)).squeeze(0)
+                
+                # Pad/select to target length
+                target_length = int(sr * self.TARGET_SECONDS)
+                processed = pad_random_select_or_loop(
+                    normalized, target_length, sr
+                )
+                
+                processed_samples.append(processed)
+            
+            # Stack and optionally resample
+            stacked = torch.stack(processed_samples)
+            audio_to_put = resampler(stacked) if resampler else stacked
+            final_audio[mask] = pad_or_truncate_batch(audio_to_put, self.target_audio_length)
+
 
         #Add channel dimension to the final audio as well.
         if final_audio.ndim != 3:
             final_audio = final_audio.unsqueeze(1)
 
-        #Make sure that they are 10 seconds.    
-        clean_audio = pad_or_truncate_batch(final_audio, 10 * self.sr)
-        B, C, L_full = clean_audio.shape
+        B, C, L_full = final_audio.shape
 
         # Generate all random start indices at once
         rand_starts = torch.randint(
@@ -448,7 +412,7 @@ class JEPA(pl.LightningModule):
         indices = rand_starts.unsqueeze(-1) + torch.arange(self.target_length, device=self.device)
         indices_expanded = indices.unsqueeze(2).expand(-1, -1, C, -1)
 
-        clean_scene_expanded = clean_audio.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+        clean_scene_expanded = final_audio.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
 
         return_clean_audios = torch.gather(clean_scene_expanded, 3, indices_expanded)
 
@@ -462,7 +426,7 @@ class JEPA(pl.LightningModule):
         # Shuffle the samples
         idx = torch.randperm(flattened_clean.size(0))
 
-        return flattened_clean[idx, ...], flattened_clean[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
+        return flattened_clean[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> ForwardReturn:
         audio, ctx_masks, target_indices, ctx_and_target_masks = batch
