@@ -163,7 +163,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_real/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_libri_training/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=25000,

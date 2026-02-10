@@ -1,4 +1,4 @@
-data_dirs: ["/projects/0/prjs1338/libri/webdataset_output/shard-{000000..000112}.tar"]
+data_dirs: ["/projects/0/prjs1338/libri/webdataset_output/shard-{000000..000200}.tar"]
 mixing_weights: [1.0]
 noise_dir: "/projects/0/prjs1338/noise/wham_noise/tr/webdataset_output_32000/shard-{000000..000019}.tar"
 rir_dir: "/projects/0/prjs1261/SequentialAmbisonicRIRs32000/train/shard-{000000..000069}.tar"

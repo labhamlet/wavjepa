@@ -17,8 +17,7 @@ from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_p
 from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
-from data_modules.dataset_functions import normalize_audio_batch, pad_or_truncate_batch
-from wavjepa.utils import pad_random_select_or_loop_batch
+from data_modules.dataset_functions import pad_or_truncate_batch, normalize_audio_batch
 
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
 
@@ -114,7 +113,8 @@ class JEPA(pl.LightningModule):
         **kwargs : dict[str, Any],
     ):
         super().__init__(**kwargs)
-    
+        self.sr = resample_sr
+
         self.resampler_48k = torchaudio.transforms.Resample(48000, self.sr).to(
             self.device
         )
@@ -173,13 +173,16 @@ class JEPA(pl.LightningModule):
 
         self.apply(self._init_weights)
         self._init_teacher()
-        if False:
+        if compile_modules:
             self._compile_operations()
+            self.pad_or_truncate_batch = torch.compile(pad_or_truncate_batch)
             self.collate_fn = torch.compile(collate_fn)
             self.resample = torch.compile(resample) 
         else:
+            self.pad_or_truncate_batch = pad_or_truncate_batch
             self.collate_fn = collate_fn
             self.resample = resample
+
 
     def _init_weights(self, m : nn.Module):
         if isinstance(m, nn.Linear):
@@ -377,9 +380,8 @@ class JEPA(pl.LightningModule):
         #Add channel dimension to the final audio as well.
         if final_audio.ndim != 3:
             final_audio = final_audio.unsqueeze(1)
-
+        
         B, C, L_full = final_audio.shape
-
         # Generate all random start indices at once
         rand_starts = torch.randint(
             0, L_full - self.target_length + 1,
