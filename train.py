@@ -135,14 +135,11 @@ class ComponentFactory:
                 lr=cfg.optimizer.lr,
                 adam_betas=(cfg.optimizer.b1, cfg.optimizer.b2),
                 adam_weight_decay=cfg.optimizer.weight_decay,
-                in_channels=cfg.data.in_channels,
                 resample_sr=cfg.data.sr,
                 process_audio_seconds=cfg.data.process_seconds,
-                use_gradient_checkpointing =cfg.trainer.use_gradient_checkpointing,
                 nr_samples_per_audio=cfg.data.samples_per_audio,
                 compile_modules = cfg.trainer.compile_modules,
                 average_top_k_layers = cfg.trainer.average_top_k_layers,
-                is_spectrogram = cfg.extractor.name == "spectrogram",
                 size = cfg.trainer.get("size", "base")
             )
         except Exception as e:
@@ -153,7 +150,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/saved_models_jepa_try_data2vec2_style/",
+        f"{cfg.save_dir}/saved_models_jepa_try_data2vec2_hparams/",
         name=identity.replace("_", "/"),
     )
 
@@ -163,7 +160,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_try_data2vec2_style{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_try_data2vec2_hparams{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=25000,
@@ -192,6 +189,7 @@ def setup_trainer(cfg, logger, callbacks) -> pl.Trainer:
         check_val_every_n_epoch=100,
         num_nodes=1,
         use_distributed_sampler=False,
+        gradient_clip_val=5.0,
         devices=num_gpus,
         strategy="ddp" if num_gpus > 1 else "auto",
     )

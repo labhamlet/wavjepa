@@ -9,7 +9,6 @@ import torchaudio
 from torch import nn
 from einops import repeat, rearrange
 import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
 import pytorch_lightning as pl
 
 from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_pos_embed, get_binaural_pos_embed
@@ -94,7 +93,7 @@ class JEPA(pl.LightningModule):
         transformer_decoder_cfg : TransformerEncoderCFG,
         decoder_embedding_dim : int = 512,
         loss_fn: nn.Module = nn.MSELoss(reduction='none'),
-        lr: float = 0.0002,
+        lr: float = 0.00075,
         adam_betas: tuple[float, float] = (0.9, 0.98),        
         adam_eps: float = 1e-06,
         adam_weight_decay: float = 0.01,
@@ -104,11 +103,8 @@ class JEPA(pl.LightningModule):
         average_top_k_layers: int = 8,
         resample_sr : int = 16000,
         process_audio_seconds: float = 2.01,
-        in_channels : int = 1,
         nr_samples_per_audio = 8,
-        use_gradient_checkpointing: bool = False,
-        compile_modules : bool = False,
-        is_spectrogram : bool = True,
+        compile_modules : bool = True,
         size : str = "base",
         **kwargs : dict[str, Any],
     ):
@@ -126,14 +122,11 @@ class JEPA(pl.LightningModule):
         self.target_audio_length = self.TARGET_SECONDS * self.sr
 
 
-        self.is_spectrogram = is_spectrogram
         self.nr_samples_per_audio = nr_samples_per_audio
         self.ema_end_step = ema_anneal_end_step
         self.target_length = int(resample_sr * process_audio_seconds)
         self.total_patches = feature_extractor.total_patches(self.target_length)
         self.use_compiled_forward = compile_modules
-        self.use_gradient_checkpointing = use_gradient_checkpointing
-        self.in_channels = in_channels
         self.save_hyperparameters(
             ignore=["feature_encoder", "feature_extractor", "loss_fn"]
         )
@@ -210,34 +203,11 @@ class JEPA(pl.LightningModule):
         )
         positions = np.arange(self.total_patches, dtype=np.float64)
         
-        if self.is_spectrogram:
-            # If it is a spectrogram, we use 2d sincos embeddings.
-            pos_embed_data = get_2d_sincos_pos_embed(
-                embedding_dim, self.extract_audio.grid_size, cls_token_num=0
-            )
-        elif self.in_channels == 2:
-            # We use 1D sincos embeddings with channel number indicated on the embedding.
-            # We assume total_patches is (time_steps * channels).
-            if self.total_patches % self.in_channels != 0:
-                raise ValueError(
-                    f"total_patches ({self.total_patches}) must be divisible by "
-                    f"in_channels ({self.in_channels}) for binaural embeddings."
-                )
-            
-            print(f"Using Binaural Positional Embeddings for {self.in_channels} channels")
-            pos_embed_data = get_binaural_pos_embed(
-                embedding_dim, 
-                time_steps=self.total_patches // self.in_channels
-            )
-        elif self.in_channels == 1:
-            # IF it is plain audio, we used 1d sincos embeddings
-            pos_embed_data = get_1d_sincos_pos_embed_from_grid(
+        pos_embed_data = get_1d_sincos_pos_embed_from_grid(
                 embedding_dim,
                 positions,
             )
-        else:
-            raise Exception(f"Not supported for audio channels more than 2, you got {self.in_channels}")
-        
+
         pos_embed.data.copy_(torch.from_numpy(pos_embed_data).float().unsqueeze(0))
         return pos_embed
 
@@ -255,7 +225,8 @@ class JEPA(pl.LightningModule):
     @torch.no_grad()
     def _step_teacher(self):
         r = self._get_ema_decay()
-        for student, teacher in zip(self.encoder.parameters(), self.teacher_encoder.parameters()):
+        for student, teacher in zip(self.encoder.parameters(), 
+                                    self.teacher_encoder.parameters()):
             teacher.data.mul_(r).add_((1 - r) * student.detach().data)
 
     def _compile_operations(self):
@@ -543,10 +514,8 @@ class JEPA(pl.LightningModule):
     src_key_padding_mask : Optional[torch.BoolTensor] = None
     ) -> torch.Tensor:
 
-        if self.use_gradient_checkpointing and self.training:
-            contextual_features = checkpoint(self.encoder, x_contexts, use_reentrant=False)
-        else:
-            contextual_features = self.encoder(x_contexts, src_key_padding_mask = src_key_padding_mask)
+
+        contextual_features = self.encoder(x_contexts, src_key_padding_mask = src_key_padding_mask)
 
         return contextual_features
 

@@ -26,12 +26,10 @@ def load_model(*args, **kwargs):
         in_channels=1,
     )
     model = RuntimeJEPA(
-        in_channels=1,
         process_seconds=2.01,
         weights=weights,
         sr=sr,
         model_size=model_size,
-        is_spectrogram=False,
         extractor=extractor,
     )
     return model
