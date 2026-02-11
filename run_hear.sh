@@ -17,8 +17,8 @@ cd listen-eval-kit
 task_dirs=(
 # /projects/0/prjs1338/tasks
 # /projects/0/prjs1338/tasks
-/projects/0/prjs1261/tasks
-# /projects/0/prjs1338/tasks
+# /projects/0/prjs1261/tasks
+/projects/0/prjs1338/tasks
 # /projects/0/prjs1338/tasks
 # /projects/0/prjs1338/tasks
 # /projects/0/prjs1338/tasks
@@ -31,8 +31,8 @@ task_dirs=(
 task_names=(
 # beijing_opera-v1.0-hear2021-full
 # dcase2016_task2-hear2021-full
-fsd50k-v1.0-full
-# esc50-v2.0.0-full
+# fsd50k-v1.0-full
+esc50-v2.0.0-full
 # libricount-v1.0.0-hear2021-full
 # speech_commands-v0.0.2-5h
 # mridangam_stroke-v1.5-full
@@ -51,8 +51,8 @@ model_name="hear_configs.WavJEPA"
 sr=16000
 model_size=base
 
-weights=/gpfs/work4/0/prjs1338/saved_models_jepa_denoised_l2/InChannels=1/WithNoise=True/WithRIR=True/SNRl=-5/SNRh=5/CleanRatio=0.0/SR=16000/alpha=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0001/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=25000.ckpt
-
+# weights=/gpfs/work4/0/prjs1338/saved_models_jepa_denoised_l2/InChannels=1/WithNoise=True/WithRIR=True/SNRl=-5/SNRh=5/CleanRatio=0.0/SR=16000/alpha=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0001/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=25000.ckpt
+weights=/gpfs/work4/0/prjs1338/saved_models_jepa_libri_training/SR=16000/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=75000.ckpt
 model_options="{\"sr\": \"$sr\", \"model\": \"$model_size\"}"
 
 python3 -m heareval.embeddings.runner "$model_name" --tasks-dir "$task_dir" --task "$task_name" --embeddings-dir "$embeddings_dir" --model "$weights" --model-options "$model_options"

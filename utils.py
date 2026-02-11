@@ -1,5 +1,5 @@
 def get_identity_from_cfg(cfg):
-    identity = f"SR={cfg.data.sr}_"
+    identity = f"Data={cfg.data.name}_SR={cfg.data.sr}_"
     identity += "BatchSize={}_NrSamples={}_NrGPUs={}_ModelSize={}_LR={}_".format(
         cfg.trainer.get("batch_size"),
         cfg.data.get("samples_per_audio"),
