@@ -100,12 +100,12 @@ class JEPA(pl.LightningModule):
         adam_weight_decay: float = 0.01,
         ema_decay: float = 0.999,
         ema_end_decay: float = 0.99999,
-        ema_anneal_end_step: int = 100000,
-        average_top_k_layers: int = 12,
+        ema_anneal_end_step: int = 75000,
+        average_top_k_layers: int = 8,
         resample_sr : int = 16000,
-        process_audio_seconds: float = 2.00,
-        in_channels : int = 2,
-        nr_samples_per_audio = 16,
+        process_audio_seconds: float = 2.01,
+        in_channels : int = 1,
+        nr_samples_per_audio = 8,
         use_gradient_checkpointing: bool = False,
         compile_modules : bool = False,
         is_spectrogram : bool = True,
@@ -283,7 +283,7 @@ class JEPA(pl.LightningModule):
             weight_decay=self.hparams.adam_weight_decay,
         )
         cosine_annealing = transformers.get_cosine_schedule_with_warmup(optimizer,
-                                 num_warmup_steps=100000, num_training_steps=self.trainer.max_steps)
+                                 num_warmup_steps=8000, num_training_steps=self.trainer.max_steps)
 
         return {"optimizer": optimizer,
                 'lr_scheduler' : {"scheduler": cosine_annealing, "interval": "step"}}

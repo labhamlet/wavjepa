@@ -1,7 +1,7 @@
 epochs: -1
 batch_size: 16
 accelerator: gpu
-steps: 375000
+steps: 400000
 precision: bf16-mixed
 use_gradient_checkpointing: False
 compile_modules: True

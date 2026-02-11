@@ -1,5 +1,5 @@
-lr: 0.0004
+lr: 7.5e-4
 b1 : 0.9
 b2: 0.98
-weight_decay: 0.04
+weight_decay: 0.01
 name : adamW

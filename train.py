@@ -153,7 +153,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa_real/",
+        f"{cfg.save_dir}/saved_models_jepa_try_data2vec2_style/",
         name=identity.replace("_", "/"),
     )
 
@@ -163,7 +163,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_libri_training/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_try_data2vec2_style{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=25000,
@@ -193,8 +193,6 @@ def setup_trainer(cfg, logger, callbacks) -> pl.Trainer:
         num_nodes=1,
         use_distributed_sampler=False,
         devices=num_gpus,
-        gradient_clip_val=5,
-        gradient_clip_algorithm = "norm",
         strategy="ddp" if num_gpus > 1 else "auto",
     )
 
