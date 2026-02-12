@@ -135,14 +135,12 @@ class ComponentFactory:
                 lr=cfg.optimizer.lr,
                 adam_betas=(cfg.optimizer.b1, cfg.optimizer.b2),
                 adam_weight_decay=cfg.optimizer.weight_decay,
-                in_channels=cfg.data.in_channels,
                 resample_sr=cfg.data.sr,
                 process_audio_seconds=cfg.data.process_seconds,
                 use_gradient_checkpointing =cfg.trainer.use_gradient_checkpointing,
                 nr_samples_per_audio=cfg.data.samples_per_audio,
                 compile_modules = cfg.trainer.compile_modules,
                 average_top_k_layers = cfg.trainer.average_top_k_layers,
-                is_spectrogram = cfg.extractor.name == "spectrogram",
                 size = cfg.trainer.get("size", "base")
             )
         except Exception as e:

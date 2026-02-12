@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 import pytorch_lightning as pl
 
+
 from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_pos_embed, get_binaural_pos_embed
 
 from wavjepa.functions import trunc_normal_
@@ -21,7 +22,6 @@ torch._dynamo.config.capture_dynamic_output_shape_ops = True
 
 def collate_fn(batch : List[torch.Tensor]) -> torch.Tensor:
     return batch.flatten(start_dim = 0, end_dim = 1)
-
 
 class JEPA(pl.LightningModule):
     """
@@ -70,7 +70,6 @@ class JEPA(pl.LightningModule):
             the teacher encoder. This parameter specifies the number of layers to
             use for the average.
     """
-    TARGET_SECONDS: int = 10
     teacher_encoder: nn.Module
     def __init__(
         self,
@@ -91,26 +90,20 @@ class JEPA(pl.LightningModule):
         average_top_k_layers: int = 12,
         resample_sr : int = 16000,
         process_audio_seconds: float = 2.00,
-        in_channels : int = 2,
         nr_samples_per_audio = 16,
         use_gradient_checkpointing: bool = False,
         compile_modules : bool = False,
-        is_spectrogram : bool = True,
         size : str = "base",
         **kwargs : dict[str, Any],
     ):
         super().__init__(**kwargs)
-        self.sr = resample_sr
-        self.target_audio_length = self.TARGET_SECONDS * self.sr
-
-        self.is_spectrogram = is_spectrogram
+        self.sr = resample_sr 
         self.nr_samples_per_audio = nr_samples_per_audio
         self.ema_end_step = ema_anneal_end_step
         self.target_length = int(resample_sr * process_audio_seconds)
         self.total_patches = feature_extractor.total_patches(self.target_length)
         self.use_compiled_forward = compile_modules
         self.use_gradient_checkpointing = use_gradient_checkpointing
-        self.in_channels = in_channels
         self.save_hyperparameters(
             ignore=["feature_encoder", "feature_extractor", "loss_fn"]
         )
@@ -156,7 +149,6 @@ class JEPA(pl.LightningModule):
         else:
             self.collate_fn = collate_fn
 
-
     def _init_weights(self, m : nn.Module):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -182,35 +174,10 @@ class JEPA(pl.LightningModule):
             requires_grad=False,
         )
         positions = np.arange(self.total_patches, dtype=np.float64)
-        
-        if self.is_spectrogram:
-            # If it is a spectrogram, we use 2d sincos embeddings.
-            pos_embed_data = get_2d_sincos_pos_embed(
-                embedding_dim, self.extract_audio.grid_size, cls_token_num=0
-            )
-        elif self.in_channels == 2:
-            # We use 1D sincos embeddings with channel number indicated on the embedding.
-            # We assume total_patches is (time_steps * channels).
-            if self.total_patches % self.in_channels != 0:
-                raise ValueError(
-                    f"total_patches ({self.total_patches}) must be divisible by "
-                    f"in_channels ({self.in_channels}) for binaural embeddings."
-                )
-            
-            print(f"Using Binaural Positional Embeddings for {self.in_channels} channels")
-            pos_embed_data = get_binaural_pos_embed(
-                embedding_dim, 
-                time_steps=self.total_patches // self.in_channels
-            )
-        elif self.in_channels == 1:
-            # IF it is plain audio, we used 1d sincos embeddings
-            pos_embed_data = get_1d_sincos_pos_embed_from_grid(
-                embedding_dim,
-                positions,
-            )
-        else:
-            raise Exception(f"Not supported for audio channels more than 2, you got {self.in_channels}")
-        
+        pos_embed_data = get_1d_sincos_pos_embed_from_grid(
+            embedding_dim,
+            positions,
+        )
         pos_embed.data.copy_(torch.from_numpy(pos_embed_data).float().unsqueeze(0))
         return pos_embed
 
