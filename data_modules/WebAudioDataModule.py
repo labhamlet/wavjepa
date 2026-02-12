@@ -4,7 +4,7 @@ import webdataset as wds
 from webdataset import RandomMix
 import torch
 import random
-from typing import List
+from typing import List, Optional, Union
 import torch.nn.functional as F
 import torchaudio
 
@@ -57,8 +57,8 @@ class WebAudioDataModule(pl.LightningDataModule):
     def __init__(
         self,
         masker,
-        data_dirs: List[str],
-        mixing_weights: List[int],
+        data_dirs: list[str] | str,
+        mixing_weights: list[int] | None,
         batch_size: int = 96,
         nr_samples_per_audio: int = 16,
         nr_time_points: int = 100,
@@ -98,9 +98,9 @@ class WebAudioDataModule(pl.LightningDataModule):
                         dtype=audio.dtype,
                         beta=14.769656459379492,
                     )
-        
+
         audio = self.resampler(audio) if audio_sr != self.sr else audio
-        audio = pre_process(audio, audio_sr, self.sr)
+        audio = pre_process(audio, self.sr)
 
         context_mask, target_indices, ctx_and_target_masks = self.masker(
             batch_size=self.nr_samples_per_audio,
@@ -115,8 +115,9 @@ class WebAudioDataModule(pl.LightningDataModule):
             ctx_and_target_masks,
         )
 
-    def make_web_dataset(self, shuffle: int):
+    def make_web_dataset_mixed(self, shuffle: int):
         """Create a WebDataset pipeline for audio processing."""
+        print(f"Mixed dataset with: {self.mixing_weights}")
         datasets = [] 
         for data_path in self.data_dirs:
             dataset = (
@@ -139,12 +140,38 @@ class WebAudioDataModule(pl.LightningDataModule):
         mix = RandomMix(datasets, self.mixing_weights)
         return mix
 
+    def make_web_dataset(self, shuffle: int):
+        """Create a WebDataset pipeline for audio processing."""
+
+        print("using the old dataset")
+        dataset = (
+            wds.WebDataset(
+                self.data_dirs,
+                resampled=True,
+                nodesplitter=wds.shardlists.split_by_node,
+                workersplitter=wds.shardlists.split_by_worker,
+                shardshuffle=False
+            )
+            .repeat()
+            .shuffle(shuffle)
+            .decode(wds.torch_audio, handler=wds.warn_and_continue)
+            .to_tuple("flac")
+            .map(self._retrieve_sample)
+            .batched(self.batch_size)
+        )
+        return dataset
+    
     def setup(self, stage: str):
         """Set up datasets for training."""
         if stage == "fit":
-            self.audio_train = self.make_web_dataset(
-                shuffle=self.SHUFFLE
-            )
+            if self.mixing_weights is None:
+                self.audio_train = self.make_web_dataset(
+                    shuffle=self.SHUFFLE
+                )
+            else:
+                self.audio_train = self.make_web_dataset_mixed(
+                    shuffle=self.SHUFFLE
+                )                
 
     def train_dataloader(self):
         """Return the training DataLoader."""

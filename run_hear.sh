@@ -59,7 +59,7 @@ model_name="hear_configs.WavJEPA"
 sr=16000
 model_size=base
 
-weights=/gpfs/work5/0/prjs1261/saved_models_jepa_libri_training/SR=16000/LibriRatio=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=75000.ckpt
+weights=/gpfs/work5/0/prjs1261/saved_models_jepa_libri_training/SR=16000/LibriRatio=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=25000.ckpt
 # weights=/projects/0/prjs1261/wavjepa_base_final/step=$ratio.ckpt
 model_options="{\"sr\": \"$sr\", \"model\": \"$model_size\"}"
 

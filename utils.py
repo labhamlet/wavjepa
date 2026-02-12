@@ -1,8 +1,13 @@
 def get_identity_from_cfg(cfg):
+
+    mixing_weight = 0.0 
+    mix = cfg.data.get("mixing_weights", []) 
+    if len(mix) == 2:
+        mixing_weight = mix[1]
     identity = f"SR={cfg.data.sr}_"
     identity += "LibriRatio={}_BatchSize={}_NrSamples={}_NrGPUs={}_ModelSize={}_LR={}_".format(
-        cfg.data.get("mixing_weights")[1],
-	cfg.trainer.get("batch_size"),
+        mixing_weight,
+	    cfg.trainer.get("batch_size"),
         cfg.data.get("samples_per_audio"),
         cfg.trainer.get("num_gpus"),
         cfg.trainer.get("size"),

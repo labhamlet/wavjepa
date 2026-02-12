@@ -153,7 +153,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa_real/",
+        f"{cfg.save_dir}/tb_logs_jepa_libri_mix/",
         name=identity.replace("_", "/"),
     )
 
@@ -163,7 +163,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_libri_training/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_libri_mix/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=25000,
@@ -206,7 +206,7 @@ def create_data_module(cfg, nr_patches) -> pl.LightningDataModule:
 
     return WebAudioDataModule(
         data_dirs=cfg.data.data_dirs,
-        mixing_weights=cfg.data.mixing_weights,
+        mixing_weights=cfg.data.get("mixing_weights", None),
         batch_size=cfg.trainer.batch_size,
         masker=masker,
         nr_samples_per_audio=cfg.data.samples_per_audio,

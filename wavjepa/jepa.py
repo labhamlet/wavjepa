@@ -350,7 +350,7 @@ class JEPA(pl.LightningModule):
         return flattened_clean[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> ForwardReturn:
-        audio_input, ctx_masks, target_indices, ctx_and_target_masks = self.prepare_batch(batch)
+        audio_input, ctx_masks, target_indices, ctx_and_target_masks = batch
         out = self(audio_input,ctx_masks, target_indices, ctx_and_target_masks)
 
         # Enhanced logging
