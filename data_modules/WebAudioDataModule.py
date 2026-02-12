@@ -6,7 +6,7 @@ import torch
 import random
 from typing import List
 import torch.nn.functional as F
-import torchaudio.transforms as T
+import torchaudio
 
 
 def pad_or_randomly_select(
@@ -35,29 +35,20 @@ def normalize_audio(audio_data, target_dBFS=-14.0):
     normalized_audio = audio_data * gain_linear  # Apply the gain to the audio data
     return normalized_audio
 
-def pre_process(audio, audio_sr, resample_sr):
-    waveform = audio[0, :] if audio.ndim > 1 else audio
-    waveform = T.Resample(audio,
-        waveform,
-        resample_sr,
-        lowpass_filter_width=64,
-        rolloff=0.9475937167399596,
-        resampling_method="sinc_interp_kaiser",
-        beta=14.769656459379492,dtype=audio.dtype) if audio_sr != resample_sr else waveform
+def pre_process(waveform, sr):
     # Normalize the audio using RMSE
     waveform = normalize_audio(waveform, -14.0)
     waveform = waveform.reshape(1, -1)
     # Make sure audio is 10 seconds
-    padding = resample_sr * 10 - waveform.shape[1]
+    padding = sr * 10 - waveform.shape[1]
     if padding > 0:
         waveform = F.pad(waveform, (0, padding), "constant", 0)
     elif padding < 0:
-        waveform = waveform[:, : resample_sr * 10]
-    return waveform[0]
+        waveform = waveform[:, : sr * 10]
+    return waveform
 
 
 class WebAudioDataModule(pl.LightningDataModule):
-    AUDIO_SR: int = 48000
     TARGET_SECONDS: int = 10
     SHUFFLE: int = 1000
     NUM_WORKERS: int = 16
@@ -73,6 +64,7 @@ class WebAudioDataModule(pl.LightningDataModule):
         nr_time_points: int = 100,
         cache_size: int = 1000,
         in_channels: int = 1,
+        sr = 16000,
         **kwargs,
     ):
         """Initialize the data module with shared noise data."""
@@ -85,10 +77,10 @@ class WebAudioDataModule(pl.LightningDataModule):
         self.nr_time_points = nr_time_points
 
         self.masker = masker
-
-        self.audio_target_length = self.AUDIO_SR * self.TARGET_SECONDS
+        self.sr = sr
 
         self.in_channels = in_channels
+
 
     def _retrieve_sample(self, sample):
         """Retrieves audio, noise, and RIR samples from disk
@@ -96,7 +88,19 @@ class WebAudioDataModule(pl.LightningDataModule):
         """
 
         audio, audio_sr = sample[0]
-        audio = pre_process(audio, audio_sr, 16000)
+        audio = audio[0, :] if audio.ndim > 1 else audio
+        self.resampler = torchaudio.transforms.Resample(
+                        audio_sr,
+                        self.sr,
+                        lowpass_filter_width=64,
+                        rolloff=0.9475937167399596,
+                        resampling_method="sinc_interp_kaiser",
+                        dtype=audio.dtype,
+                        beta=14.769656459379492,
+                    )
+        
+        audio = self.resampler(audio) if audio_sr != self.sr else audio
+        audio = pre_process(audio, audio_sr, self.sr)
 
         context_mask, target_indices, ctx_and_target_masks = self.masker(
             batch_size=self.nr_samples_per_audio,

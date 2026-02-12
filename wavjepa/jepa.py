@@ -310,13 +310,15 @@ class JEPA(pl.LightningModule):
         """
         Runs on GPU. Splits batch by SR, resamples, recombines.
         """
-        # Unpack batch (Audio is all 480,000)
         (
             audio_batch,
             ctx_masks,
             target_indices,
             ctx_and_target_masks,
         ) = batch
+        
+        if audio_batch.ndim != 3:
+            audio_batch = audio_batch.unsqueeze(1)
         
         B, C, L_full = audio_batch.shape
         # Generate all random start indices at once

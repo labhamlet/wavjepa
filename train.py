@@ -211,6 +211,7 @@ def create_data_module(cfg, nr_patches) -> pl.LightningDataModule:
         masker=masker,
         nr_samples_per_audio=cfg.data.samples_per_audio,
         nr_time_points=nr_patches,
+        sr = cfg.data.sr
     )
 
 def build_model(cfg) -> torch.nn.Module:
