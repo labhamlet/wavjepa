@@ -55,10 +55,8 @@ class RuntimeJEPA(torch.nn.Module):
             transformer_encoder_layers_cfg=TransformerLayerCFG.create(),
             transformer_decoder_cfg=TransformerEncoderCFG.create(),
             transformer_decoder_layers_cfg=TransformerLayerCFG.create(d_model=384),
-            in_channels=in_channels,
             resample_sr=self.sample_rate,
             size=model_size,
-            is_spectrogram=is_spectrogram,
             process_audio_seconds=process_seconds,
         )
 

@@ -1,0 +1,7 @@
+data_dirs: ["/gpfs/work3/2/managed_datasets/hf_cache_dir/datasets--agkphysics--AudioSet/snapshots/5a2fa42a1506470d275a47ff8e1fdac5b364e6ef/data/unbal_train{000..869}.tar"]
+mixing_weights: [1.0]
+sr: 16000
+in_channels: 1
+samples_per_audio: 8
+process_seconds : 2.01
+name : AudioSet

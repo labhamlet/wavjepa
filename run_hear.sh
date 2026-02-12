@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=gpu_h100
+#SBATCH --partition=gpu_a100
 #SBATCH --gpus=1
 #SBATCH --job-name=MWMAE
 #SBATCH --ntasks=1
@@ -49,17 +49,17 @@ ratios=(
 1.0
 )
 
-task_name=esc50-v2.0.0-full
+task_name=vox_lingua_top10-hear2021-full
 task_dir=/projects/0/prjs1338/tasks
 ratio=${ratios[$SLURM_ARRAY_TASK_ID]}
-embeddings_dir="/projects/prjs1261/JepaEmbeddings$ratio"
-score_dir="hear_wavjepa_libri_$ratio"
+embeddings_dir="/projects/prjs1261/JepaEmbeddingsm"
+score_dir="hear_wavjepa_libri_m"
 
 model_name="hear_configs.WavJEPA"
 sr=16000
 model_size=base
 
-weights=/gpfs/work5/0/prjs1261/saved_models_jepa_libri_training/SR=16000/LibriRatio=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=25000.ckpt
+weights=/gpfs/work5/0/prjs1261/saved_models_jepa_reproduce/SR=16000/LibriRatio=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=25000.ckpt
 # weights=/projects/0/prjs1261/wavjepa_base_final/step=$ratio.ckpt
 model_options="{\"sr\": \"$sr\", \"model\": \"$model_size\"}"
 

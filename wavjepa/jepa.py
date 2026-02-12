@@ -195,7 +195,8 @@ class JEPA(pl.LightningModule):
     @torch.no_grad()
     def _step_teacher(self):
         r = self._get_ema_decay()
-        for student, teacher in zip(self.encoder.parameters(), self.teacher_encoder.parameters()):
+        for student, teacher in zip(self.encoder.parameters(), 
+                                    self.teacher_encoder.parameters()):
             teacher.data.mul_(r).add_((1 - r) * student.detach().data)
 
     def _compile_operations(self):

@@ -38,6 +38,7 @@ def normalize_audio(audio_data, target_dBFS=-14.0):
 def pre_process(waveform, sr):
     # Normalize the audio using RMSE
     waveform = normalize_audio(waveform, -14.0)
+    #Add a channel dimension
     waveform = waveform.reshape(1, -1)
     # Make sure audio is 10 seconds
     padding = sr * 10 - waveform.shape[1]
