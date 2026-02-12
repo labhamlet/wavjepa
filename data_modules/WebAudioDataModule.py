@@ -6,6 +6,7 @@ import torch
 import random
 from typing import List
 import torch.nn.functional as F
+import torchaudio.transforms as T
 
 
 def pad_or_randomly_select(
@@ -22,6 +23,37 @@ def pad_or_randomly_select(
         audio = audio
     assert audio.shape[-1] == target_length
     return audio
+
+
+def normalize_audio(audio_data, target_dBFS=-14.0):
+    rms = torch.sqrt(torch.mean(audio_data**2))  # Calculate the RMS of the audio
+    if rms == 0:  # Avoid division by zero in case of a completely silent audio
+        return audio_data
+    current_dBFS = 20 * torch.log10(rms)  # Convert RMS to dBFS
+    gain_dB = target_dBFS - current_dBFS  # Calculate the required gain in dB
+    gain_linear = 10 ** (gain_dB / 20)  # Convert gain from dB to linear scale
+    normalized_audio = audio_data * gain_linear  # Apply the gain to the audio data
+    return normalized_audio
+
+def pre_process(audio, audio_sr, resample_sr):
+    waveform = audio[0, :] if audio.ndim > 1 else audio
+    waveform = T.Resample(audio,
+        waveform,
+        resample_sr,
+        lowpass_filter_width=64,
+        rolloff=0.9475937167399596,
+        resampling_method="sinc_interp_kaiser",
+        beta=14.769656459379492,dtype=audio.dtype) if audio_sr != resample_sr else waveform
+    # Normalize the audio using RMSE
+    waveform = normalize_audio(waveform, -14.0)
+    waveform = waveform.reshape(1, -1)
+    # Make sure audio is 10 seconds
+    padding = resample_sr * 10 - waveform.shape[1]
+    if padding > 0:
+        waveform = F.pad(waveform, (0, padding), "constant", 0)
+    elif padding < 0:
+        waveform = waveform[:, : resample_sr * 10]
+    return waveform[0]
 
 
 class WebAudioDataModule(pl.LightningDataModule):
@@ -64,26 +96,16 @@ class WebAudioDataModule(pl.LightningDataModule):
         """
 
         audio, audio_sr = sample[0]
-
-        if audio.ndim == 2 and (audio.shape[0] < audio.shape[1]):
-            audio = audio[0]  # Take the left channel if it is stereo audio
-        elif audio.ndim == 2 and (audio.shape[0] >= audio.shape[1]):
-            audio = audio.T
-            audio = audio[0]  # Take the left channel if it is stereo audio
-        else:
-            audio = audio
-            
-        audio = pad_or_randomly_select(audio, self.audio_target_length)
+        audio = pre_process(audio, audio_sr, 16000)
 
         context_mask, target_indices, ctx_and_target_masks = self.masker(
             batch_size=self.nr_samples_per_audio,
             n_times=self.nr_time_points,
-            in_channels=self.in_channels,
+            in_channels=self.in_channels
         )
 
         return (
             audio,
-            audio_sr,
             context_mask,
             target_indices,
             ctx_and_target_masks,

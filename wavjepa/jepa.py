@@ -5,7 +5,6 @@ import numpy as np
 from typing import List, Any, Optional
 
 import torch
-import torchaudio
 from torch import nn
 from einops import repeat, rearrange
 import torch.nn.functional as F
@@ -17,23 +16,11 @@ from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_p
 from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
-from data_modules.dataset_functions import pad_or_truncate_batch, normalize_audio_batch
 
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
 
 def collate_fn(batch : List[torch.Tensor]) -> torch.Tensor:
     return batch.flatten(start_dim = 0, end_dim = 1)
-
-def resample(audio: torch.Tensor, resample_sr: int, original_sr = 32000) -> torch.Tensor:
-    return torchaudio.functional.resample(
-        audio,
-        original_sr,
-        resample_sr,
-        lowpass_filter_width=64,
-        rolloff=0.9475937167399596,
-        resampling_method="sinc_interp_kaiser",
-        beta=14.769656459379492,
-    )
 
 
 class JEPA(pl.LightningModule):
@@ -114,17 +101,7 @@ class JEPA(pl.LightningModule):
     ):
         super().__init__(**kwargs)
         self.sr = resample_sr
-
-        self.resampler_48k = torchaudio.transforms.Resample(48000, self.sr).to(
-            self.device
-        )
-        self.resampler_44k = torchaudio.transforms.Resample(44100, self.sr).to(
-            self.device
-        )
-        self.valid_len_44k = int(self.TARGET_SECONDS * 44100)
-        self.valid_len_16k = int(self.TARGET_SECONDS * 16000)
         self.target_audio_length = self.TARGET_SECONDS * self.sr
-
 
         self.is_spectrogram = is_spectrogram
         self.nr_samples_per_audio = nr_samples_per_audio
@@ -175,13 +152,9 @@ class JEPA(pl.LightningModule):
         self._init_teacher()
         if compile_modules:
             self._compile_operations()
-            self.pad_or_truncate_batch = torch.compile(pad_or_truncate_batch)
             self.collate_fn = torch.compile(collate_fn)
-            self.resample = torch.compile(resample) 
         else:
-            self.pad_or_truncate_batch = pad_or_truncate_batch
             self.collate_fn = collate_fn
-            self.resample = resample
 
 
     def _init_weights(self, m : nn.Module):
@@ -340,48 +313,12 @@ class JEPA(pl.LightningModule):
         # Unpack batch (Audio is all 480,000)
         (
             audio_batch,
-            sr_batch,
             ctx_masks,
             target_indices,
             ctx_and_target_masks,
         ) = batch
-
-
-        batch_size = audio_batch.shape[0]
-        # 2. RESAMPLE AUDIO (Vectorized)
-        mask_48k = sr_batch == 48000
-        mask_44k = sr_batch == 44100
-        mask_16k = sr_batch == 16000  # resampled librispeech
-
-        final_audio = torch.zeros(
-            (batch_size, self.target_audio_length),
-            device=self.device,
-            dtype=audio_batch.dtype,
-        )
-
-        if mask_48k.any():
-            audio = normalize_audio_batch(audio_batch[mask_48k])
-            final_audio[mask_48k] = self.resampler_48k(audio)
-        if mask_16k.any():
-            # If audio was 32khz we had lots of padding to match 10 seconds od 48kHz,
-            # Remove that padding.
-            audio = normalize_audio_batch(
-                audio_batch[mask_16k][..., : self.valid_len_16k]
-            )
-            final_audio[mask_16k] = audio
-        if mask_44k.any():
-            # If audio was 44.1khz we had lots of padding to match 10 seconds od 48kHz,
-            # Remove that padding.
-            audio = normalize_audio_batch(
-                audio_batch[mask_44k][..., : self.valid_len_44k]
-            )
-            final_audio[mask_44k] = self.resampler_44k(audio)
-
-        #Add channel dimension to the final audio as well.
-        if final_audio.ndim != 3:
-            final_audio = final_audio.unsqueeze(1)
         
-        B, C, L_full = final_audio.shape
+        B, C, L_full = audio_batch.shape
         # Generate all random start indices at once
         rand_starts = torch.randint(
             0, L_full - self.target_length + 1,
@@ -394,7 +331,7 @@ class JEPA(pl.LightningModule):
         indices = rand_starts.unsqueeze(-1) + torch.arange(self.target_length, device=self.device)
         indices_expanded = indices.unsqueeze(2).expand(-1, -1, C, -1)
 
-        clean_scene_expanded = final_audio.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+        clean_scene_expanded = audio_batch.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
 
         return_clean_audios = torch.gather(clean_scene_expanded, 3, indices_expanded)
 
@@ -411,8 +348,8 @@ class JEPA(pl.LightningModule):
         return flattened_clean[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> ForwardReturn:
-        audio, ctx_masks, target_indices, ctx_and_target_masks = batch
-        out = self(audio, ctx_masks, target_indices, ctx_and_target_masks)
+        audio_input, ctx_masks, target_indices, ctx_and_target_masks = self.prepare_batch(batch)
+        out = self(audio_input,ctx_masks, target_indices, ctx_and_target_masks)
 
         # Enhanced logging
         log_data = {
@@ -488,23 +425,22 @@ class JEPA(pl.LightningModule):
         if self.post_extraction_mapper is not None:
             local_features = self.post_extraction_mapper(local_features)
         
-        local_features_generated = local_features + self.pos_encoding_encoder
-
-        contextual_features = self.encoder_forward(local_features_generated, src_key_padding_mask=ctx_masks)
+        local_features = local_features + self.pos_encoding_encoder
+        contextual_features = self.encoder_forward(local_features, src_key_padding_mask=ctx_masks)
         # Accumulate contextual features on the batch dimensions
         contextual_features = contextual_features[~ctx_masks]
         contextual_features = self.encoder_to_decoder_mapper(contextual_features)
         
         preds = self.decoder_forward(contextual_features, ctx_masks, nr_targets = target_indices.shape[1], src_key_padding_mask=ctx_and_target_masks)
         
-        local_features_clean = local_features.detach()
-        targets = self._forward_teacher(local_features_clean)
+        # Compute the training targets using the teacher.
+        x_targets = local_features.detach()
+        targets = self._forward_teacher(x_targets)
 
         loss = self.masked_loss(preds, targets, target_indices)
         
         return ForwardReturn(
-            local_features_clean=local_features_clean,
-            local_features_generated=local_features_generated,
+            local_features=local_features,
             contextual_features=contextual_features,
             loss=loss,
             preds=preds,
