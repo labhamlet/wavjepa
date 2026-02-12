@@ -23,7 +23,7 @@ tasks_dir=/projects/0/prjs1338/tasks
 embeddings_dir=/projects/0/prjs1338/EmbeddingsWavJEPAhf
 score_dir=hear_wavjepa_hf
 
-model_name=hear_configs.WavJEPANat_huggingface
+model_name=hear_configs.WavJEPA_huggingface
 
 python3 -m heareval.embeddings.runner "$model_name" --tasks-dir $tasks_dir --task "$task_name" --embeddings-dir $embeddings_dir
 python3 -m heareval.predictions.runner $embeddings_dir/$model_name/$task_name

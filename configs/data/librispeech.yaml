@@ -1,0 +1,6 @@
+data_dirs: "/projects/0/prjs1338/libri/webdataset_output/shard-{000000..000199}.tar"
+sr: 16000
+in_channels: 1
+samples_per_audio: 8
+process_seconds : 2.01
+name : LibriSpeech

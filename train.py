@@ -16,7 +16,6 @@ from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
 
-ORIGINAL_SR = 32000
 
 # Component registries
 NETWORKS = {"JEPA": JEPA}
@@ -136,15 +135,12 @@ class ComponentFactory:
                 lr=cfg.optimizer.lr,
                 adam_betas=(cfg.optimizer.b1, cfg.optimizer.b2),
                 adam_weight_decay=cfg.optimizer.weight_decay,
-                in_channels=cfg.data.in_channels,
                 resample_sr=cfg.data.sr,
                 process_audio_seconds=cfg.data.process_seconds,
                 use_gradient_checkpointing =cfg.trainer.use_gradient_checkpointing,
                 nr_samples_per_audio=cfg.data.samples_per_audio,
                 compile_modules = cfg.trainer.compile_modules,
                 average_top_k_layers = cfg.trainer.average_top_k_layers,
-                is_spectrogram = cfg.extractor.name == "spectrogram",
-                clean_data_ratio = cfg.data.get("clean_data_ratio", 0.0),
                 size = cfg.trainer.get("size", "base")
             )
         except Exception as e:
@@ -155,7 +151,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa_real/",
+        f"{cfg.save_dir}/tb_logs_jepa_reverted/",
         name=identity.replace("_", "/"),
     )
 
@@ -165,7 +161,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_real/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_reverted/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=25000,
@@ -208,19 +204,13 @@ def create_data_module(cfg, nr_patches) -> pl.LightningDataModule:
 
     return WebAudioDataModule(
         data_dirs=cfg.data.data_dirs,
-        mixing_weights=cfg.data.mixing_weights,
-        noise_dir=cfg.data.noise_dir,
-        rir_dir=cfg.data.rir_dir,
+        mixing_weights=cfg.data.get("mixing_weights", None),
         batch_size=cfg.trainer.batch_size,
         masker=masker,
         nr_samples_per_audio=cfg.data.samples_per_audio,
         nr_time_points=nr_patches,
-        with_rir=cfg.data.with_rir,
-        with_noise=cfg.data.with_noise,
-        snr_high=cfg.data.snr_high, 
-        snr_low=cfg.data.snr_low
+        sr = cfg.data.sr
     )
-
 
 def build_model(cfg) -> torch.nn.Module:
     """Build the complete model with all components."""

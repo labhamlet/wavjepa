@@ -1,14 +1,6 @@
-data_dirs: ["/gpfs/work3/2/managed_datasets/hf_cache_dir/datasets--agkphysics--AudioSet/snapshots/5a2fa42a1506470d275a47ff8e1fdac5b364e6ef/data/unbal_train{000..869}.tar"]
-mixing_weights: [1.0]
-noise_dir: "/projects/0/prjs1338/noise/wham_noise/tr/webdataset_output_32000/shard-{000000..000019}.tar"
-rir_dir: "/projects/0/prjs1261/SequentialAmbisonicRIRs32000/train/shard-{000000..000069}.tar"
+data_dirs: "/gpfs/work3/2/managed_datasets/hf_cache_dir/datasets--agkphysics--AudioSet/snapshots/5a2fa42a1506470d275a47ff8e1fdac5b364e6ef/data/unbal_train{000..869}.tar"
 sr: 16000
 in_channels: 1
 samples_per_audio: 8
 process_seconds : 2.01
-clean_data_ratio : 0.8
-with_noise : True
-with_rir : True
-snr_low : 5
-snr_high : 40
-name : NaturalisticAudioSet
+name : AudioSet

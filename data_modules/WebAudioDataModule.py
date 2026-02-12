@@ -3,51 +3,10 @@ import pytorch_lightning as pl
 import webdataset as wds
 from webdataset import RandomMix
 import torch
-import multiprocessing as mp
-import queue
 import random
-from typing import List
+from typing import List, Optional, Union
 import torch.nn.functional as F
-
-
-def fade_in(audio, sr, duration = 0.2):
-    end = int(duration * sr)
-    start = 0
-    fade_curve = torch.linspace(0.0, 1.0, end, device = audio.device)
-    audio[start:end] = audio[start:end] * fade_curve
-    return audio
-
-def loop(audio, sr, target_length):
-    assert audio.ndim == 1, "Audio has channel dimension, collapse this before using looping"
-    audio_length = audio.shape[-1]
-    new_audio = torch.zeros(target_length, device=audio.device)
-    looping = target_length - audio_length
-    #Get the first n_time points to loop the audio.
-    new_audio[:audio_length] = audio 
-    new_audio[audio_length:] = fade_in(audio[:looping], sr, duration= 0.2)
-    return new_audio
-
-def randomly_select_pad_or_loop(
-    audio : torch.Tensor, 
-    target_length: int,
-    sr : int,
-
-    ) -> torch.Tensor:
-    audio_length = audio.shape[-1]
-    padding = target_length - audio_length
-    needed_seconds = padding // sr 
-
-    if needed_seconds >= 0.5:
-        audio = loop(audio, sr, target_length)
-    elif needed_seconds <= 0.5 and needed_seconds >= 0.0:
-        audio = F.pad(audio, (0, padding), "constant", 0)
-    elif needed_seconds <= 0:  # select a random 10 seconds.
-        rand_index = torch.randint(0, audio_length - target_length, (1,))
-        audio = audio[rand_index : rand_index + target_length]
-    else:
-        audio = audio
-    assert audio.shape[-1] == target_length
-    return audio
+import torchaudio
 
 
 def pad_or_randomly_select(
@@ -65,211 +24,32 @@ def pad_or_randomly_select(
     assert audio.shape[-1] == target_length
     return audio
 
-def mask_to_indices(mask: torch.BoolTensor, check: bool = False) -> torch.Tensor:
-    """
-    Returns the indices of the true elements.
 
-    Args:
-        mask: (*batch_dims, masked_dim)
-            Boolean mask. For every element, the number of true values in the masked dimension
-            should be the same. i.e. ``mask.sum(dim=-1)`` should be constant.
-        check: bool
-            If ``True``, check that the output is correct. Slower.
+def normalize_audio(audio_data, target_dBFS=-14.0):
+    rms = torch.sqrt(torch.mean(audio_data**2))  # Calculate the RMS of the audio
+    if rms == 0:  # Avoid division by zero in case of a completely silent audio
+        return audio_data
+    current_dBFS = 20 * torch.log10(rms)  # Convert RMS to dBFS
+    gain_dB = target_dBFS - current_dBFS  # Calculate the required gain in dB
+    gain_linear = 10 ** (gain_dB / 20)  # Convert gain from dB to linear scale
+    normalized_audio = audio_data * gain_linear  # Apply the gain to the audio data
+    return normalized_audio
 
-    Returns:
-        indices: (*batch_dims, n_unmasked)
-            Indices of the true elements in the mask.
-    """
-
-    n_true = mask.sum(dim=-1).unique()
-    assert n_true.size(0) == 1
-    n_true = int(n_true.item())
-    batch_dims = list(mask.shape[:-1])
-    if check:
-        out = mask.nonzero(as_tuple=False)
-        out = out.view(*batch_dims, n_true, len(batch_dims) + 1)
-        for i, d in enumerate(batch_dims):
-            for j in range(0, d):
-                assert (out[..., i].select(i, j) == j).all()
-        out = out[..., -1]
-    else:
-        *_, out = mask.nonzero(as_tuple=True)
-        out = out.view(*batch_dims, n_true)
-    return out.to(mask.device)
-
-
-# using cluster for frame masking hurts the performance, so just use the naive random sampling
-def gen_maskid_frame_tgt(masked_patches: torch.Tensor, mask_size: int = 100):
-    indices: List[int] = masked_patches.nonzero().flatten().tolist()  # type: ignore
-    mask_id: List[int] = random.sample(indices, mask_size)
-    return torch.tensor(mask_id)
-
-
-# using cluster for frame masking hurts the performance, so just use the naive random sampling
-def gen_maskid_frame(sequence_len: int = 512, mask_size: int = 100) -> torch.Tensor:
-    mask_id = random.sample(range(0, sequence_len), mask_size)
-    return torch.tensor(mask_id)
-
-
-def to_torch(sample):
-    return torch.from_numpy(sample[0])
-
-
-class NoiseDataManager:
-    """Manages RIR data loading with multiprocessing in the main process."""
-
-    def __init__(
-        self, noise_data_dir: str, buffer_size: int = 500, num_workers: int = 1
-    ):
-        self.noise_data_dir = noise_data_dir
-        self.buffer_size = buffer_size
-        self.num_workers = num_workers
-        self.manager = mp.Manager()
-        self.noise_queue = self.manager.Queue(maxsize=buffer_size)
-        self.stop_event = self.manager.Event()
-        self.processes = []
-        self.started = False
-
-    def _worker(self):
-        """Worker process to load RIR data."""
-
-        def to_torch(sample):
-            return torch.from_numpy(sample[0]).float()
-
-        shuffle_buffer = 100
-        dataset = (
-            wds.WebDataset(self.noise_data_dir, resampled=True, shardshuffle=False)
-            .repeat()
-            .shuffle(shuffle_buffer)
-            .decode("pil")
-            .to_tuple("npy")
-            .map(to_torch)
-        )
-
-        loader = iter(
-            torch.utils.data.DataLoader(
-                dataset,
-                num_workers=self.num_workers,
-                prefetch_factor=4,
-                batch_size=None,
-            )
-        )
-        print("Noise Loader is set", flush=True)
-        while not self.stop_event.is_set():
-            try:
-                rirs = next(loader)
-                self.noise_queue.put(rirs, timeout=1.0)
-            except queue.Full:
-                continue
-
-    def start(self):
-        """Start the Noise loading process."""
-        if not self.started:
-            self.process = mp.Process(target=self._worker, daemon=False)
-            self.process.start()
-            self.started = True
-        return self
-
-    def __next__(self, timeout: float = 1.0):
-        """Get Noise data from the queue."""
-        try:
-            return self.noise_queue.get(timeout=timeout)
-        except queue.Empty:
-            # Return some default RIR data if queue is empty
-            return self.__next__()
-
-    def stop(self):
-        """Stop the Noise loading process."""
-        if self.started:
-            self.stop_event.set()
-            self.process.join(timeout=5.0)
-            if self.process.is_alive():
-                self.process.terminate()
-            self.started = False
-
-    def __del__(self):
-        """Ensure cleanup on deletion."""
-        self.stop()
-
-
-class RIRDataManager:
-    """Manages RIR data loading with multiprocessing in the main process."""
-
-    def __init__(self, rir_data_dir: str, buffer_size: int = 500, num_workers: int = 4):
-        self.rir_data_dir = rir_data_dir
-        self.buffer_size = buffer_size
-        self.num_workers = num_workers
-        self.manager = mp.Manager()
-        self.rir_queue = self.manager.Queue(maxsize=buffer_size)
-        self.stop_event = self.manager.Event()
-        self.processes = []
-        self.started = False
-
-    def _worker(self):
-        """Worker process to load RIR data."""
-
-        def to_torch(sample):
-            return torch.from_numpy(sample[0]).float()
-
-        shuffle_buffer = 100
-        dataset = (
-            wds.WebDataset(self.rir_data_dir, resampled=True, shardshuffle=False)
-            .repeat()
-            .shuffle(shuffle_buffer)
-            .decode("pil")
-            .to_tuple("npy")
-            .map(to_torch)
-        )
-
-        loader = iter(
-            torch.utils.data.DataLoader(
-                dataset,
-                num_workers=self.num_workers,
-                prefetch_factor=4,
-                batch_size=None,
-            )
-        )
-        print("RIR Loader is set", flush=True)
-        while not self.stop_event.is_set():
-            try:
-                rirs = next(loader)
-                self.rir_queue.put(rirs, timeout=1.0)
-            except queue.Full:
-                continue
-
-    def start(self):
-        """Start the RIR loading process."""
-        if not self.started:
-            self.process = mp.Process(target=self._worker, daemon=False)
-            self.process.start()
-            self.started = True
-        return self
-
-    def __next__(self, timeout: float = 1.0):
-        """Get RIR data from the queue."""
-        try:
-            return self.rir_queue.get(timeout=timeout)
-        except queue.Empty:
-            # Return some default RIR data if queue is empty
-            return self.__next__()
-
-    def stop(self):
-        """Stop the RIR loading process."""
-        if self.started:
-            self.stop_event.set()
-            self.process.join(timeout=5.0)
-            if self.process.is_alive():
-                self.process.terminate()
-            self.started = False
-
-    def __del__(self):
-        """Ensure cleanup on deletion."""
-        self.stop()
+def pre_process(waveform, sr):
+    # Normalize the audio using RMSE
+    waveform = normalize_audio(waveform, -14.0)
+    #Add a channel dimension
+    waveform = waveform.reshape(1, -1)
+    # Make sure audio is 10 seconds
+    padding = sr * 10 - waveform.shape[1]
+    if padding > 0:
+        waveform = F.pad(waveform, (0, padding), "constant", 0)
+    elif padding < 0:
+        waveform = waveform[:, : sr * 10]
+    return waveform
 
 
 class WebAudioDataModule(pl.LightningDataModule):
-    AUDIO_SR: int = 48000
-    NOISE_SR: int = 32000
     TARGET_SECONDS: int = 10
     SHUFFLE: int = 1000
     NUM_WORKERS: int = 16
@@ -278,19 +58,14 @@ class WebAudioDataModule(pl.LightningDataModule):
     def __init__(
         self,
         masker,
-        data_dirs: List[str],
-        mixing_weights: List[int],
-        rir_dir: str,
-        noise_dir: str,
+        data_dirs: list[str] | str,
+        mixing_weights: list[int] | None,
         batch_size: int = 96,
-        with_noise: bool = True,
-        with_rir: bool = True,
-        snr_low: int = 5,
-        snr_high: int = 40,
         nr_samples_per_audio: int = 16,
         nr_time_points: int = 100,
         cache_size: int = 1000,
         in_channels: int = 1,
+        sr = 16000,
         **kwargs,
     ):
         """Initialize the data module with shared noise data."""
@@ -302,87 +77,48 @@ class WebAudioDataModule(pl.LightningDataModule):
         self.cache_size = cache_size
         self.nr_time_points = nr_time_points
 
-        self.with_noise = with_noise
-        self.with_rir = with_rir
-
-        self.with_noise = with_noise
-        self.with_rir = with_rir
-
         self.masker = masker
-        if self.with_noise:
-            self.noise_loader = NoiseDataManager(noise_dir).start()
-
-        if self.with_rir:
-            self.rir_loader = RIRDataManager(rir_dir).start()
-
-        self.snr_low = snr_low
-        self.snr_high = snr_high
-
-        self.noise_target_length = self.NOISE_SR * self.TARGET_SECONDS
-        self.audio_target_length = self.AUDIO_SR * self.TARGET_SECONDS
+        self.sr = sr
 
         self.in_channels = in_channels
+
 
     def _retrieve_sample(self, sample):
         """Retrieves audio, noise, and RIR samples from disk
         Normalization is done later in the CoRA module.
         """
 
-        # Initialize all variables
-        noise = None
-        noise_rirs = None
-        source_rir = None
-        noise_length = None
-        snr = None
-
         audio, audio_sr = sample[0]
-        audio = audio[0]  # Take the left channel if it is stereo audio
+        audio = audio[0, :] if audio.ndim > 1 else audio
+        self.resampler = torchaudio.transforms.Resample(
+                        audio_sr,
+                        self.sr,
+                        lowpass_filter_width=64,
+                        rolloff=0.9475937167399596,
+                        resampling_method="sinc_interp_kaiser",
+                        dtype=audio.dtype,
+                        beta=14.769656459379492,
+                    )
 
-        audio = pad_or_randomly_select(audio, self.audio_target_length)
-
-        # If with the rir, load the rir.
-        # Here, take the source RIR.
-        if self.with_rir:
-            scene = next(self.rir_loader)
-            source_rir = scene[0]
-
-        if self.with_noise:
-            # Raw noise can be longer or shorter than 10 seconds, and it is 32kHz.
-            if self.with_rir:
-                noise_rirs = rirs[1:]
-            raw_noise = next(self.noise_loader)
-            noise_length = max(raw_noise.shape)
-
-            #Here we randomly select a 10 second noise, or pad it to 10 seconds. 
-            #We keep the noise length later to know if we need to fade in and out.
-            noise = pad_or_randomly_select(raw_noise, self.noise_target_length)
-            snr = (
-                torch.distributions.uniform.Uniform(self.snr_low, self.snr_high)
-                .sample()
-                .item()
-            )
+        audio = self.resampler(audio) if audio_sr != self.sr else audio
+        audio = pre_process(audio, self.sr)
 
         context_mask, target_indices, ctx_and_target_masks = self.masker(
             batch_size=self.nr_samples_per_audio,
             n_times=self.nr_time_points,
-            in_channels=self.in_channels,
+            in_channels=self.in_channels
         )
 
         return (
             audio,
-            audio_sr,
-            source_rir,
-            noise_rirs,
-            noise,
-            noise_length,
-            snr,
             context_mask,
             target_indices,
             ctx_and_target_masks,
         )
 
-    def make_web_dataset(self, shuffle: int):
+    def make_web_dataset_mixed(self, shuffle: int):
         """Create a WebDataset pipeline for audio processing."""
+        print(f"Mixed dataset with: {self.mixing_weights}")
         datasets = [] 
         for data_path in self.data_dirs:
             dataset = (
@@ -405,12 +141,38 @@ class WebAudioDataModule(pl.LightningDataModule):
         mix = RandomMix(datasets, self.mixing_weights)
         return mix
 
+    def make_web_dataset(self, shuffle: int):
+        """Create a WebDataset pipeline for audio processing."""
+
+        print("using the old dataset")
+        dataset = (
+            wds.WebDataset(
+                self.data_dirs,
+                resampled=True,
+                nodesplitter=wds.shardlists.split_by_node,
+                workersplitter=wds.shardlists.split_by_worker,
+                shardshuffle=False
+            )
+            .repeat()
+            .shuffle(shuffle)
+            .decode(wds.torch_audio, handler=wds.warn_and_continue)
+            .to_tuple("flac")
+            .map(self._retrieve_sample)
+            .batched(self.batch_size)
+        )
+        return dataset
+    
     def setup(self, stage: str):
         """Set up datasets for training."""
         if stage == "fit":
-            self.audio_train = self.make_web_dataset(
-                shuffle=self.SHUFFLE
-            )
+            if self.mixing_weights is None:
+                self.audio_train = self.make_web_dataset(
+                    shuffle=self.SHUFFLE
+                )
+            else:
+                self.audio_train = self.make_web_dataset_mixed(
+                    shuffle=self.SHUFFLE
+                )                
 
     def train_dataloader(self):
         """Return the training DataLoader."""
