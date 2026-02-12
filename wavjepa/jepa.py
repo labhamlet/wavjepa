@@ -431,7 +431,10 @@ class JEPA(pl.LightningModule):
         contextual_features = contextual_features[~ctx_masks]
         contextual_features = self.encoder_to_decoder_mapper(contextual_features)
         
-        preds = self.decoder_forward(contextual_features, ctx_masks, nr_targets = target_indices.shape[1], src_key_padding_mask=ctx_and_target_masks)
+        preds = self.decoder_forward(contextual_features, 
+                                     ctx_masks, 
+                                     nr_targets = target_indices.shape[1], 
+                                     src_key_padding_mask=ctx_and_target_masks)
         
         # Compute the training targets using the teacher.
         x_targets = local_features.detach()
@@ -452,6 +455,7 @@ class JEPA(pl.LightningModule):
         B = ctx_mask.shape[0]
         # Prepare the mask tokens.
         tgt = self.mask_token.repeat(B, self.total_patches, 1).type_as(contextual_features) # (B, seq_len, decoder_dim)
+        #Get the context tokens.
         tgt[~ctx_mask, :] = contextual_features.reshape((-1, self.decoder_embedding_dim))
         tgt = tgt.reshape((B, -1, self.decoder_embedding_dim))
         # Add positional encoding to the decoder
