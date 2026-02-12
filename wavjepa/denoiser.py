@@ -8,12 +8,9 @@ import torch
 import torchaudio
 from torch import nn
 import torch.nn.functional as F
-import torchaudio.functional as F_audio
-from torch.utils.checkpoint import checkpoint
 import pytorch_lightning as pl
 
-
-from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_pos_embed, get_binaural_pos_embed
+from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_binaural_pos_embed
 
 from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
@@ -26,13 +23,16 @@ from data_modules.dataset_functions import pad_or_truncate_batch, normalize_audi
 from data_modules.scene_module.generate_scenes_batch import convolve_with_rir
 
 ORIGINAL_SR=32000
-#Think about using weight decay from 0.04 to 0.4?
+
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
 
 def collate_fn(batch : List[torch.Tensor]) -> torch.Tensor:
     return batch.flatten(start_dim = 0, end_dim = 1)
 
-def resample(audio: torch.Tensor, resample_sr: int, original_sr = 32000) -> torch.Tensor:
+def resample(audio: torch.Tensor, resample_sr: int, original_sr=32000) -> torch.Tensor:
+    """
+    Resample the audio using kaiser best resampling
+    """
     return torchaudio.functional.resample(
         audio,
         original_sr,
@@ -42,7 +42,6 @@ def resample(audio: torch.Tensor, resample_sr: int, original_sr = 32000) -> torc
         resampling_method="sinc_interp_kaiser",
         beta=14.769656459379492,
     )
-
 
 class Denoiser(pl.LightningModule):
     """
@@ -97,13 +96,12 @@ class Denoiser(pl.LightningModule):
         feature_extractor: Extractor,
         transformer_encoder_layers_cfg : TransformerLayerCFG,
         transformer_encoder_cfg : TransformerEncoderCFG,
-        lr: float = 0.0002,
+        lr: float = 0.0001,
         adam_betas: tuple[float, float] = (0.9, 0.98),        
         adam_eps: float = 1e-06,
         adam_weight_decay: float = 0.01,
         resample_sr : int = 16000,
         process_audio_seconds: float = 2.00,
-        in_channels : int = 2,
         nr_samples_per_audio = 16,
         size : str = "base",
         alpha: float = 0.8,
@@ -111,22 +109,14 @@ class Denoiser(pl.LightningModule):
     ):
         super().__init__(**kwargs)
         self.alpha=alpha
-        self.resampler_48k = torchaudio.transforms.Resample(48000, ORIGINAL_SR).to(
-            self.device
-        )
-        self.resampler_44k = torchaudio.transforms.Resample(44100, ORIGINAL_SR).to(
-            self.device
-        )
-        self.valid_len_44k = int(self.TARGET_SECONDS * 44100)
-        self.valid_len_32k = int(self.TARGET_SECONDS * 32000)
-        self.target_audio_length = self.TARGET_SECONDS * ORIGINAL_SR
+        self.sr = self.resample_sr
+        self.target_audio_length = self.TARGET_SECONDS * self.sr
 
         self.sr = resample_sr 
         self.process_audio_seconds = process_audio_seconds
         self.nr_samples_per_audio = nr_samples_per_audio
         self.target_length = int(resample_sr * process_audio_seconds)
         self.total_patches = feature_extractor.total_patches(self.target_length)
-        self.in_channels = in_channels
         self.save_hyperparameters(
             ignore=["feature_encoder", "feature_extractor", "loss_fn"]
         )
@@ -152,7 +142,6 @@ class Denoiser(pl.LightningModule):
         
         self.pad_or_truncate_batch = pad_or_truncate_batch
         self.collate_fn = collate_fn
-        self.resample = resample
 
     def _set_teacher(self, weights_ckpt): 
         weights = torch.load(weights_ckpt, weights_only=False)
@@ -182,10 +171,8 @@ class Denoiser(pl.LightningModule):
             transformer_encoder_layers_cfg=TransformerLayerCFG.create(),
             transformer_decoder_cfg=TransformerEncoderCFG.create(),
             transformer_decoder_layers_cfg=TransformerLayerCFG.create(d_model=384),
-            in_channels=self.in_channels,
             resample_sr=self.sr,
             size="base",
-            is_spectrogram=False,
             process_audio_seconds=self.process_audio_seconds,
         )
         model.load_state_dict(new_state_dict, strict=False)
@@ -193,20 +180,6 @@ class Denoiser(pl.LightningModule):
             p.requires_grad = False
         model.eval()
         self.teacher = model
-
-    def _compile(self):
-
-        try:
-            self.encoder_forward = torch.compile(self.encoder_forward, fullgraph=True)
-            self.extract_audio = torch.compile(self.extract_audio)
-            self.pad_or_truncate_batch = torch.compile(pad_or_truncate_batch)
-            self.collate_fn = torch.compile(collate_fn)
-            self.resample = torch.compile(resample) 
-
-        except Exception as e:
-            print(f"Warning: Could not compile operations: {e}")
-            self.use_compiled_forward = False
-
 
     def _get_pos_embed_params(self, embedding_dim):
         """Calculates the pos embedding embedding parameters and returns them."""
@@ -220,26 +193,10 @@ class Denoiser(pl.LightningModule):
             requires_grad=False,
         )
         positions = np.arange(self.total_patches, dtype=np.float64)
-        #TODO! Remove this total patches later.
-        if self.in_channels == 2 and (self.total_patches == 400):
-            # We use 1D sincos embeddings with channel number indicated on the last 384 dimensions.
-            print("Using Binaural Positional Embeddings")
-            pos_embed_data = get_binaural_pos_embed(embedding_dim, time_steps=self.total_patches // self.in_channels
-            )
-        elif self.in_channels == 2 and (self.total_patches == 200):
-            #Use 1D pos_embeddings if channel-mixing feature extractor
-            pos_embed_data = get_1d_sincos_pos_embed_from_grid(
-                embedding_dim,
-                positions,
-            )     
-        elif self.in_channels == 1 and (self.total_patches == 200):
-            # IF it is plain audio, we used 1d sincos embeddings
-            pos_embed_data = get_1d_sincos_pos_embed_from_grid(
-                embedding_dim,
-                positions,
-            )
-        else:
-            raise Exception(f"Not implemented for more in_channels, {self.in_channels}, {self.total_patches}")
+        pos_embed_data = get_1d_sincos_pos_embed_from_grid(
+            embedding_dim,
+            positions,
+        )
         pos_embed.data.copy_(torch.from_numpy(pos_embed_data).float().unsqueeze(0))
         return pos_embed
 
@@ -275,99 +232,27 @@ class Denoiser(pl.LightningModule):
             normalized = (return_audio - mean) / (std + 1e-5) # Add epsilon for stability
             return normalized 
 
-        # Unpack batch (Audio is all 480,000 length here, and noise is 320,000)
         (
-            audio_batch,
-            sr_batch,
-            source_rir,
+            audio,
             noise,
-            noise_lengths,
+            source_rir,
             snr,
-            ctx_masks,
-            target_indices,
-            ctx_and_target_masks,
         ) = batch
-
-        placed_noise_batch = [None]
-
-        batch_size = audio_batch.shape[0]
-        
-        # 2. RESAMPLE AUDIO (Vectorized)
-        mask_48k = sr_batch == 48000
-        mask_44k = sr_batch == 44100
-        mask_32k = sr_batch == 32000  # resampled librispeech
-
-        final_audio = torch.zeros(
-            (batch_size, self.target_audio_length),
-            device=self.device,
-            dtype=audio_batch.dtype,
-        )
-
-        if mask_48k.any():
-            audio = normalize_audio_batch(audio_batch[mask_48k])
-            final_audio[mask_48k] = self.resampler_48k(audio)
-        if mask_32k.any():
-            # If audio was 32khz we had lots of padding to match 10 seconds od 48kHz,
-            # Remove that padding.
-            audio = normalize_audio_batch(
-                audio_batch[mask_32k][..., : self.valid_len_32k]
-            )
-            final_audio[mask_32k] = audio
-        if mask_44k.any():
-            # If audio was 44.1khz we had lots of padding to match 10 seconds od 48kHz,
-            # Remove that padding.
-            audio = normalize_audio_batch(
-                audio_batch[mask_44k][..., : self.valid_len_44k]
-            )
-            final_audio[mask_44k] = self.resampler_44k(audio)
-
-        #Get the noise
-        if noise[0] is not None:
-            # This is the real length of the noise actually.
-            placed_noise_batch = torch.zeros_like(final_audio)
-            for i in range(batch_size):
-                #Did we pad the noise?
-                valid_len = min(noise_lengths[i].item(), noise.shape[-1])
-                current_noise = noise[i, :valid_len]
-
-                #Normalize only the non-faded part.
-                current_noise = normalize_audio(current_noise)
-                #Fade in and out the noise.
-                #If the real length was longer than the audio 
-                #we apply both fade-in and fade-out
-                #Else
-                #we apply fade-out only.
-                current_noise = generate_scenes.fade_noise(
-                    noise_lengths[i].item(), current_noise, final_audio[i], ORIGINAL_SR
-                )
-                
-                #If target audio length is bigger than the valid length
-                #Place the noise randomly.
-                if self.target_audio_length > valid_len:
-                    start_idx = torch.randint(
-                        0, self.target_audio_length - valid_len, (1,)
-                    ).item()
-                    # Place current noise randomly to the audio file.
-                    placed_noise_batch[i, start_idx : start_idx + valid_len] = (
-                        current_noise
-                    )
-                else: 
-                    placed_noise_batch[i] = current_noise[: self.target_audio_length]
-        
+    
         # Generate a naturalistic scene
         # This handles the sitatuion when rir is [None, None], and placed_noise_batch is [None, None]
         generated_scene = generate_scenes_batch.generate_scene(
             source_rir=source_rir,
-            source=final_audio,
-            noise=placed_noise_batch,
+            source=audio,
+            noise=noise,
             snr=snr       
         )
   
         generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
 
         #Add channel dimension to the final audio as well.
-        if final_audio.ndim != 3:
-            final_audio = final_audio.unsqueeze(1)
+        if audio.ndim != 3:
+            final_audio = audio.unsqueeze(1)
         if generated_scene.ndim != 3:
             generated_scene = generated_scene.unsqueeze(1)
         
@@ -377,8 +262,8 @@ class Denoiser(pl.LightningModule):
         clean_audio = pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
         # We know that the original sr is 32000.
         if self.sr != ORIGINAL_SR:
-            generated_scene = self.resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
-            clean_scene = self.resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
+            generated_scene = resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
+            clean_scene = resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
 
         assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
         

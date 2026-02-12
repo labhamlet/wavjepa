@@ -1,1 +1,2 @@
 from .WebAudioDataModule import WebAudioDataModule as WebAudioDataModule
+from .WebAudioDataModuleDenoiser import WebAudioDataModuleDenoiser as WebAudioDataModuleDenoiser

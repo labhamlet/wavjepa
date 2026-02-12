@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from utils import get_identity_from_cfg
-from data_modules import WebAudioDataModule
+from data_modules import WebAudioDataModuleDenoiser
 
 from wavjepa.jepa import JEPA
 from wavjepa.denoiser import Denoiser
@@ -76,48 +76,6 @@ class ComponentFactory:
                     share_weights_over_channels = weight_sharing,
                 )
     
-    
-    @staticmethod
-    def create_masker(cfg):
-        """Create and configure the masker component."""
-        masker_class = MASKERS.get(cfg.masker.name)
-        if masker_class is None:
-            raise ValueError(
-                f"Unknown masker type: {cfg.masker.name}. "
-                f"Available maskers: {list(MASKERS.keys())}"
-            )
-        
-        if cfg.masker.name == "inverse-masker":
-            return masker_class( 
-                mask_prob = cfg.masker.mask_prob,
-                mask_length = cfg.masker.mask_length,
-                channel_based_masking=cfg.masker.channel_based_masking,
-            )
-        elif cfg.masker.name == "block-masker" or cfg.masker.name=="random-masker" or cfg.masker.name=="random-cluster-masker":
-            return masker_class(
-                target_masks_per_context  = cfg.masker.target_masks_per_context,
-                context_cluster_d = cfg.masker.context_cluster_d,
-                context_cluster_u = cfg.masker.context_cluster_u,
-                target_cluster_d = cfg.masker.target_cluster_d,
-                target_cluster_u = cfg.masker.target_cluster_u,
-                channel_based_masking = cfg.masker.channel_based_masking,
-            )
-        elif cfg.masker.name == "time-inverse-masker":
-            return masker_class(
-                target_masks_per_context = cfg.masker.target_masks_per_context,
-                context_mask_prob = cfg.masker.context_mask_prob,
-                context_mask_length = cfg.masker.context_mask_length,
-                target_prob = cfg.masker.target_prob,
-                target_length = cfg.masker.target_length,
-                ratio_cutoff = cfg.masker.ratio_cutoff,
-                channel_based_masking = cfg.masker.channel_based_masking,
-            )
-        else:
-            return masker_class(
-                mask_prob = cfg.masker.mask_prob,
-                cluster= cfg.masker.cluster,
-                channel_based_masking=cfg.masker.channel_based_masking,
-                )
     
     @staticmethod
     def create_network(cfg, extractor : Extractor) -> JEPA:
@@ -194,16 +152,12 @@ def setup_trainer(cfg, logger, callbacks) -> pl.Trainer:
 
 def create_data_module(cfg, nr_patches) -> pl.LightningDataModule:
     """Create and configure the data module."""
-    factory = ComponentFactory()
-    masker = factory.create_masker(cfg)
 
-    return WebAudioDataModule(
-        data_dirs=cfg.data.data_dirs,
-        mixing_weights=cfg.data.mixing_weights,
+    return WebAudioDataModuleDenoiser(
+        data_dir=cfg.data.data_dir,
         noise_dir=cfg.data.noise_dir,
         rir_dir=cfg.data.rir_dir,
         batch_size=cfg.trainer.batch_size,
-        masker=masker,
         nr_samples_per_audio=cfg.data.samples_per_audio,
         nr_time_points=nr_patches,
         with_rir=cfg.data.with_rir,
