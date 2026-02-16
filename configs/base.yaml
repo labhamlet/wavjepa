@@ -2,7 +2,7 @@ defaults:
   - data: audioset
   - optimizer: adamW
   - trainer: default_trainer
-  - extractor : ConvFeatureExtractor
+  - extractor : wavjepa
   - masker : TimeInverseBlock
 
 model: JEPA
