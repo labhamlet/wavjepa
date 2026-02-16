@@ -51,7 +51,7 @@ class AudioMasker(nn.Module):
 
         for batch_idx in range(batch_size):
             while True:
-                context = compute_mask_indices(
+                context = ~compute_mask_indices(
                                 shape = (1, n_times),
                                 padding_mask = None,
                                 mask_prob = self.context_prob,
