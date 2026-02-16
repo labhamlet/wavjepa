@@ -14,4 +14,5 @@ module load 2023
 module load Anaconda3/2023.07-2
 source activate sjape
 
-python3 train.py data=audioset_mixed_try trainer.batch_size=32 trainer.num_gpus=2
+
+python3 train.py masker=speech data=librispeech_no_rir_no_noise data.clean_data_ratio=1.0 extractor=ConvFeatureExtractor trainer.batch_size=16 trainer.num_gpus=1

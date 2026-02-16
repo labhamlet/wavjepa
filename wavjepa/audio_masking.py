@@ -213,7 +213,7 @@ def compute_mask_indices(
             )
 
         mask_idc = np.unique(mask_idc[mask_idc < sz])
-        if len(mask_idc) >= sz:
+        if len(mask_idc) > sz:
             raise ValueError(
                 (
                     f"the entire sequence is masked. "

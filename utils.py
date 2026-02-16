@@ -1,23 +1,21 @@
 def get_identity_from_cfg(cfg):
-
-    mixing_weight = 0.0 
-    mix = cfg.data.get("mixing_weights", []) 
-    if len(mix) == 2:
-        mixing_weight = mix[1]
-    identity = f"SR={cfg.data.sr}_"
-    identity += "LibriRatio={}_BatchSize={}_NrSamples={}_NrGPUs={}_ModelSize={}_LR={}_".format(
-        mixing_weight,
-	    cfg.trainer.get("batch_size"),
+    identity = "Data={}_".format(
+        cfg.data.get("name", None),
+    )
+    identity += "Extractor={}_InSeconds={}_".format(
+        cfg.extractor.name,
+        cfg.data.process_seconds,
+    )
+    identity += "BatchSize={}_NrSamples={}_NrGPUs={}_LR={}_".format(
+        cfg.trainer.get("batch_size"),
         cfg.data.get("samples_per_audio"),
         cfg.trainer.get("num_gpus"),
-        cfg.trainer.get("size"),
         cfg.optimizer.get("lr"),
     )
-    identity += "Masking={}_TargetProb={}_TargetLen={}_ContextLen={}_TopK={}".format(
-        cfg.masker.name,
+    identity += "TargetProb={}_TargetLen={}_ContextLen={}_ContextRatio={}".format(
         cfg.masker.get("target_prob", 0.25),
-        cfg.masker.get("target_length", 0),
-        cfg.masker.get("context_mask_length", 0),
-        cfg.trainer.get("average_top_k_layers", 1),
+        cfg.masker.get("target_length", 10),
+        cfg.masker.get("min_context_len", 5),
+        cfg.trainer.get("ratio_cutoff", 0.15),
     )
     return identity
