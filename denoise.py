@@ -13,7 +13,6 @@ from data_modules import WebAudioDataModuleDenoiser
 from wavjepa.jepa import JEPA
 from wavjepa.denoiser import Denoiser
 
-from wavjepa.masking import RandomClusterMaskMaker, RandomMaskMaker, TimeInverseBlockMasker, MultiBlockMaskMaker
 from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 import wavjepa 
@@ -22,10 +21,8 @@ sys.modules['sjepa'] = wavjepa
 
 ORIGINAL_SR = 32000
 
-# Component registries
-MASKERS = {"random-masker": RandomMaskMaker, 'random-cluster-masker': RandomClusterMaskMaker, 'time-inverse-masker' : TimeInverseBlockMasker, 'multi-block-masker': MultiBlockMaskMaker}
-EXTRACTORS = {"spatial-conv-extractor": ConvFeatureExtractor, 
-              "conv-extractor": ConvFeatureExtractor}
+EXTRACTORS = {"wav2vec2": ConvFeatureExtractor, 
+              "wavjepa": ConvFeatureExtractor}
 
 ENCODERS = {"Transformer" : {"LayerCFG" : TransformerLayerCFG, "EncoderCFG": TransformerEncoderCFG}}
 
@@ -55,21 +52,7 @@ class ComponentFactory:
         weight_sharing = cfg.extractor.get("share_weights_over_channels", None)
 
 
-        if cfg.extractor.name == "spectrogram":
-            return extractor_class(
-                n_mels = cfg.extractor.n_mels,
-                sr = cfg.data.sr,
-                embedding_dim = cfg.extractor.embedding_dim,
-                in_channels = cfg.data.in_channels,
-                fshape = cfg.extractor.fshape,
-                tshape= cfg.extractor.tshape,
-                fstride= cfg.extractor.fstride,
-                tstride= cfg.extractor.tstride,
-                trainable= cfg.extractor.trainable
-            )
-        else:
-            # Weight sharing is enabled in only ConvChannelFeatureExtractor
-            return extractor_class(
+        return extractor_class(
                     conv_layers_spec=eval(cfg.extractor.conv_layers_spec),
                     in_channels=cfg.data.in_channels,
                     depthwise = cfg.extractor.depthwise,
@@ -80,31 +63,27 @@ class ComponentFactory:
     @staticmethod
     def create_network(cfg, extractor : Extractor) -> JEPA:
         """Create and configure the main network."""
-
-        try:
-            return Denoiser(
-                feature_extractor=extractor,
-                transformer_encoder_cfg = TransformerEncoderCFG.create(), 
-                transformer_encoder_layers_cfg = TransformerLayerCFG.create(),
-                lr=cfg.optimizer.lr,
-                adam_betas=(cfg.optimizer.b1, cfg.optimizer.b2),
-                adam_weight_decay=cfg.optimizer.weight_decay,
-                in_channels=cfg.data.in_channels,
-                resample_sr=cfg.data.sr,
-                process_audio_seconds=cfg.data.process_seconds,
-                nr_samples_per_audio=cfg.data.samples_per_audio,
-                size = cfg.trainer.get("size", "base"),
-                alpha=cfg.trainer.alpha
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to create network instance: {str(e)}")
+        return Denoiser(
+            feature_extractor=extractor,
+            transformer_encoder_cfg = TransformerEncoderCFG.create(), 
+            transformer_encoder_layers_cfg = TransformerLayerCFG.create(),
+            lr=cfg.optimizer.lr,
+            adam_betas=(cfg.optimizer.b1, cfg.optimizer.b2),
+            adam_weight_decay=cfg.optimizer.weight_decay,
+            in_channels=cfg.data.in_channels,
+            resample_sr=cfg.data.sr,
+            process_audio_seconds=cfg.data.process_seconds,
+            nr_samples_per_audio=cfg.data.samples_per_audio,
+            size = cfg.trainer.get("size", "base"),
+            alpha=cfg.trainer.alpha
+        )
 
 
 def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa_denoised_l2/",
+        f"{cfg.save_dir}/tb_logs_jepa_denoised/",
         name=identity.replace("_", "/"),
     )
 
@@ -114,7 +93,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised_l2/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=2500,

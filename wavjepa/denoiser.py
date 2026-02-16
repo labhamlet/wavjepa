@@ -10,7 +10,7 @@ from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 
-from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_binaural_pos_embed
+from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid
 
 from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
@@ -18,9 +18,8 @@ from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoder
 from wavjepa.jepa import JEPA 
 from wavjepa.extractors import ConvFeatureExtractor
 
-from data_modules.scene_module import generate_scenes_batch, generate_scenes
-from data_modules.dataset_functions import pad_or_truncate_batch, normalize_audio_batch, normalize_audio
-from data_modules.scene_module.generate_scenes_batch import convolve_with_rir
+from data_modules.scene_module import generate_scenes_batch
+from data_modules.dataset_functions import pad_or_truncate_batch
 
 ORIGINAL_SR=32000
 
@@ -239,8 +238,7 @@ class Denoiser(pl.LightningModule):
             snr,
         ) = batch
     
-        # Generate a naturalistic scene
-        # This handles the sitatuion when rir is [None, None], and placed_noise_batch is [None, None]
+
         generated_scene = generate_scenes_batch.generate_scene(
             source_rir=source_rir,
             source=audio,

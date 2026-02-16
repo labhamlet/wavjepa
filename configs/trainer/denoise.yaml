@@ -8,5 +8,5 @@ compile_modules: True
 num_gpus : 2
 size : base
 average_top_k_layers : 8
-alpha : 0.8
+alpha : 0.0
 teacher_ckpt_weights : /gpfs/work5/0/prjs1261/wavjepa_base_final/step=375000.ckpt

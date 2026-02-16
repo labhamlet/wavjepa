@@ -94,42 +94,6 @@ def instance_normalize(feature: torch.Tensor) -> torch.Tensor:
     """
     return (feature - feature.mean()) / (feature.std() + 1e-8)
 
-
-def pre_process_audio(audio, audio_sr, resample_sr):
-    resampler = T.Resample(audio_sr, resample_sr, dtype=audio.dtype)
-    waveform = audio[0, :] if audio.ndim > 1 else audio
-    # Resample the audio with 
-    waveform = (
-        resampler(waveform)
-        if audio_sr != resample_sr
-        else waveform
-    )
-    # Normalize the audio using RMSE
-    waveform = normalize_audio(waveform, -14.0)
-    waveform = waveform.reshape(1, -1)
-    # Make sure audio is 10 seconds
-    padding = resample_sr * 10 - waveform.shape[1]
-    if padding > 0:
-        waveform = F.pad(waveform, (0, padding), "constant", 0)
-    elif padding < 0:
-        waveform = waveform[:, : resample_sr * 10]
-    return waveform[0]
-
-
-def pre_process_noise(audio, audio_sr, resample_sr):
-    resampler = T.Resample(audio_sr, resample_sr, dtype=audio.dtype)
-    waveform = audio[0, :] if audio.ndim > 1 else audio
-    # Resample the audio
-    waveform = (
-        resampler(waveform)
-        if audio_sr != resample_sr
-        else waveform
-    )
-    # Normalize the audio using RMSE
-    waveform = normalize_audio(waveform, -14.0)
-    return waveform
-
-
 def normalize_audio(audio_data, target_dBFS=-14.0):
     rms = torch.sqrt(torch.mean(audio_data**2))  # Calculate the RMS of the audio
     if rms == 0:  # Avoid division by zero in case of a completely silent audio
@@ -140,18 +104,15 @@ def normalize_audio(audio_data, target_dBFS=-14.0):
     normalized_audio = audio_data * gain_linear  # Apply the gain to the audio data
     return normalized_audio
 
-def normalize_audio_batch(audio_data, target_dBFS=-14.0, eps=1e-9):
-    """
-    Vectorized normalization to a target dBFS.
-    audio_data: (Batch, Time)
-    """
-    rms = torch.sqrt(torch.mean(audio_data**2, dim=-1, keepdim=True) + eps)
-    current_dBFS = 20 * torch.log10(rms)
-    gain_dB = target_dBFS - current_dBFS
-    gain_linear = 10 ** (gain_dB / 20)
-    normalized_audio = audio_data * gain_linear
-    is_silent = rms <= eps
-    normalized_audio = torch.where(
-        is_silent, torch.zeros_like(normalized_audio), normalized_audio
-    )
-    return normalized_audio
+def pre_process(waveform, sr):
+    # Normalize the audio using RMSE
+    waveform = normalize_audio(waveform, -14.0)
+    #Add a channel dimension
+    waveform = waveform.reshape(1, -1)
+    # Make sure audio is 10 seconds
+    padding = sr * 10 - waveform.shape[1]
+    if padding > 0:
+        waveform = F.pad(waveform, (0, padding), "constant", 0)
+    elif padding < 0:
+        waveform = waveform[:, : sr * 10]
+    return waveform
