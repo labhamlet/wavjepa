@@ -7,6 +7,7 @@ import wavjepa
 
 sys.modules['sjepa'] = wavjepa
 
+SR = 16000
 def load_model(*args, **kwargs):
     weights = None
     if len(args) != 0:
@@ -17,20 +18,24 @@ def load_model(*args, **kwargs):
             map_location=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
         )
 
-    sr = kwargs.get("sr", 16000)
-    sr = int(sr)
-    model_size = kwargs.get("model", "base")
 
-    extractor = ConvFeatureExtractor(
-        conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)]"),
-        in_channels=1,
-    )
+    if kwargs["extractor"] == "wav2vec2":
+        extractor = ConvFeatureExtractor(
+            conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)] + [(512,2,2)]"),
+            in_channels=1,
+        )
+    else:
+        extractor = ConvFeatureExtractor(
+            conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)]"),
+            in_channels=1,
+        )    
+
     model = RuntimeJEPA(
         in_channels=1,
-        process_seconds=2.01,
+        process_seconds=float(kwargs["in_seconds"]),
         weights=weights,
-        sr=sr,
-        model_size=model_size,
+        sr=SR,
+        model_size="base",
         is_spectrogram=False,
         extractor=extractor,
     )

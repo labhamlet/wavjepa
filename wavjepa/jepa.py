@@ -11,9 +11,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 import pytorch_lightning as pl
 
-
-from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_pos_embed, get_binaural_pos_embed
-
+from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid
 from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG

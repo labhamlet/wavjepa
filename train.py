@@ -11,7 +11,7 @@ from utils import get_identity_from_cfg
 from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
-from wavjepa.masking import RandomClusterMaskMaker, RandomMaskMaker, TimeInverseBlockMasker, MultiBlockMaskMaker
+from wavjepa.masking import AudioMasker
 from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
@@ -19,11 +19,19 @@ from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
 # Component registries
 NETWORKS = {"JEPA": JEPA}
-MASKERS = {"random-masker": RandomMaskMaker, 'random-cluster-masker': RandomClusterMaskMaker, 'time-inverse-masker' : TimeInverseBlockMasker, 'multi-block-masker': MultiBlockMaskMaker}
-EXTRACTORS = {"spatial-conv-extractor": ConvFeatureExtractor, 
-              "conv-extractor": ConvFeatureExtractor}
-
-ENCODERS = {"Transformer" : {"LayerCFG" : TransformerLayerCFG, "EncoderCFG": TransformerEncoderCFG}}
+MASKERS = {
+    "speech-masker": AudioMasker
+}
+EXTRACTORS = {
+    "wav2vec2": ConvFeatureExtractor,
+    "wavjepa": ConvFeatureExtractor,
+}
+ENCODERS = {
+    "Transformer": {
+        "LayerCFG": TransformerLayerCFG,
+        "EncoderCFG": TransformerEncoderCFG,
+    }
+}
 
 torch.set_float32_matmul_precision("medium")
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -49,28 +57,12 @@ class ComponentFactory:
             )
         
         weight_sharing = cfg.extractor.get("share_weights_over_channels", None)
-
-
-        if cfg.extractor.name == "spectrogram":
-            return extractor_class(
-                n_mels = cfg.extractor.n_mels,
-                sr = cfg.data.sr,
-                embedding_dim = cfg.extractor.embedding_dim,
-                in_channels = cfg.data.in_channels,
-                fshape = cfg.extractor.fshape,
-                tshape= cfg.extractor.tshape,
-                fstride= cfg.extractor.fstride,
-                tstride= cfg.extractor.tstride,
-                trainable= cfg.extractor.trainable
+        return extractor_class(
+                conv_layers_spec=eval(cfg.extractor.conv_layers_spec),
+                in_channels=cfg.data.in_channels,
+                depthwise = cfg.extractor.depthwise,
+                share_weights_over_channels = weight_sharing,
             )
-        else:
-            # Weight sharing is enabled in only ConvChannelFeatureExtractor
-            return extractor_class(
-                    conv_layers_spec=eval(cfg.extractor.conv_layers_spec),
-                    in_channels=cfg.data.in_channels,
-                    depthwise = cfg.extractor.depthwise,
-                    share_weights_over_channels = weight_sharing,
-                )
     
     
     @staticmethod
@@ -83,37 +75,14 @@ class ComponentFactory:
                 f"Available maskers: {list(MASKERS.keys())}"
             )
         
-        if cfg.masker.name == "inverse-masker":
-            return masker_class( 
-                mask_prob = cfg.masker.mask_prob,
-                mask_length = cfg.masker.mask_length,
+        return masker_class(
+                target_masks_per_context=cfg.masker.target_masks_per_context,
+                target_prob=cfg.masker.target_prob,
+                target_length=cfg.masker.target_length,
+                ratio_cutoff=cfg.masker.ratio_cutoff,
                 channel_based_masking=cfg.masker.channel_based_masking,
+                min_context_len = cfg.masker.min_context_len
             )
-        elif cfg.masker.name == "block-masker" or cfg.masker.name=="random-masker" or cfg.masker.name=="random-cluster-masker":
-            return masker_class(
-                target_masks_per_context  = cfg.masker.target_masks_per_context,
-                context_cluster_d = cfg.masker.context_cluster_d,
-                context_cluster_u = cfg.masker.context_cluster_u,
-                target_cluster_d = cfg.masker.target_cluster_d,
-                target_cluster_u = cfg.masker.target_cluster_u,
-                channel_based_masking = cfg.masker.channel_based_masking,
-            )
-        elif cfg.masker.name == "time-inverse-masker":
-            return masker_class(
-                target_masks_per_context = cfg.masker.target_masks_per_context,
-                context_mask_prob = cfg.masker.context_mask_prob,
-                context_mask_length = cfg.masker.context_mask_length,
-                target_prob = cfg.masker.target_prob,
-                target_length = cfg.masker.target_length,
-                ratio_cutoff = cfg.masker.ratio_cutoff,
-                channel_based_masking = cfg.masker.channel_based_masking,
-            )
-        else:
-            return masker_class(
-                mask_prob = cfg.masker.mask_prob,
-                cluster= cfg.masker.cluster,
-                channel_based_masking=cfg.masker.channel_based_masking,
-                )
     
     @staticmethod
     def create_network(cfg, extractor : Extractor) -> JEPA:
@@ -151,7 +120,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa_reverted/",
+        f"{cfg.save_dir}/tb_logs_jepa",
         name=identity.replace("_", "/"),
     )
 
@@ -161,7 +130,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_reverted/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=25000,
@@ -258,8 +227,8 @@ def main(cfg):
         print_training_info(cfg)
         
         # Start training
-        trainer.fit(model, data_module, ckpt_path=None)
-        
+        trainer.fit(model, data_module)
+
     except Exception as e:
         print(f"Training failed with error: {str(e)}")
         raise
