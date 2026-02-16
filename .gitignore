@@ -171,4 +171,4 @@ cython_debug/
 
 #hydra
 outputs/
-ARCH/
+*.sh
