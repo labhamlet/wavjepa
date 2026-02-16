@@ -11,7 +11,7 @@ from utils import get_identity_from_cfg
 from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
-from wavjepa.masking import AudioMasker
+from wavjepa.masking import AudioMasker, SpeechMasker
 from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
@@ -20,7 +20,8 @@ from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 # Component registries
 NETWORKS = {"JEPA": JEPA}
 MASKERS = {
-    "audio-masker": AudioMasker
+    "audio-masker": AudioMasker,
+    "speech-masker": SpeechMasker
 }
 EXTRACTORS = {
     "wav2vec2": ConvFeatureExtractor,
@@ -75,14 +76,27 @@ class ComponentFactory:
                 f"Available maskers: {list(MASKERS.keys())}"
             )
         
-        return masker_class(
-                target_masks_per_context=cfg.masker.target_masks_per_context,
-                target_prob=cfg.masker.target_prob,
-                target_length=cfg.masker.target_length,
-                ratio_cutoff=cfg.masker.ratio_cutoff,
-                channel_based_masking=cfg.masker.channel_based_masking,
-                min_context_len = cfg.masker.min_context_len
-            )
+        if cfg.masker.name == "speech-masker":
+            return SpeechMasker(
+                    target_masks_per_context=cfg.masker.target_masks_per_context,
+                    target_prob=cfg.masker.target_prob,
+                    target_length=cfg.masker.target_length,
+                    ratio_cutoff=cfg.masker.ratio_cutoff,
+                    channel_based_masking=cfg.masker.channel_based_masking,
+                    min_context_len = cfg.masker.min_context_len,
+                )
+        else:
+            return AudioMasker(
+                    target_masks_per_context=cfg.masker.target_masks_per_context,
+                    context_prob=cfg.masker.context_prob,
+                    context_length=cfg.masker.context_length,
+                    target_prob=cfg.masker.target_prob,
+                    target_length=cfg.masker.target_length,
+                    ratio_cutoff=cfg.masker.ratio_cutoff,
+                    channel_based_masking=cfg.masker.channel_based_masking,
+                    min_context_len = cfg.masker.min_context_len,
+                )
+
     
     @staticmethod
     def create_network(cfg, extractor : Extractor) -> JEPA:
