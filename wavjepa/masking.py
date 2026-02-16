@@ -76,7 +76,7 @@ class AudioMasker(nn.Module):
                 if ratio >= self.ratio_cutoff:
                     break
             
-            # target_positions[batch_idx] = target_positions_
+            target_positions[batch_idx] = target_positions_
             context_positions[batch_idx] = context_positions_
 
         final_context_mask = ~context_positions 
