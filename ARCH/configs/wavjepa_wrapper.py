@@ -9,7 +9,6 @@ import numpy as np
 import torchaudio
 from arch_eval import Model, ClassificationModel
 
-
 def resample(audio: torch.Tensor, resample_sr: int, original_sr = 32000) -> torch.Tensor:
     return torchaudio.functional.resample(
         audio,

@@ -21,9 +21,9 @@ from arch_eval import SLURP
 from arch_eval import EMOVO
 
 from configs.wavjepa_wrapper import WavJEPAModelWrapper
-from sjepa.extractors import ConvFeatureExtractor
-from sjepa.jepa import JEPA
-from sjepa.types import TransformerEncoderCFG, TransformerLayerCFG
+from wavjepa.extractors import ConvFeatureExtractor
+from wavjepa.jepa import JEPA
+from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 import wavjepa
 import argparse
 
