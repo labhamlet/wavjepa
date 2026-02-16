@@ -12,7 +12,6 @@ import pytorch_lightning as pl
 
 from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid
 
-from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
 from wavjepa.jepa import JEPA 
@@ -98,12 +97,12 @@ class Denoiser(pl.LightningModule):
         lr: float = 0.0001,
         adam_betas: tuple[float, float] = (0.9, 0.98),        
         adam_eps: float = 1e-06,
-        adam_weight_decay: float = 0.01,
+        adam_weight_decay: float = 0.0,
         resample_sr : int = 16000,
-        process_audio_seconds: float = 2.00,
+        process_audio_seconds: float = 2.01,
         nr_samples_per_audio = 16,
         size : str = "base",
-        alpha: float = 0.8,
+        alpha: float = 0.0,
         **kwargs : dict[str, Any],
     ):
         super().__init__(**kwargs)

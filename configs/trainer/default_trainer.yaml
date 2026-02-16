@@ -3,7 +3,6 @@ batch_size: 32
 accelerator: gpu
 steps: 375000
 precision: bf16-mixed
-use_gradient_checkpointing: False
 compile_modules: True
 num_gpus : 2
 size : base
