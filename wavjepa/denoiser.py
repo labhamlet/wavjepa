@@ -134,7 +134,6 @@ class Denoiser(pl.LightningModule):
         encoder_layer = nn.TransformerEncoderLayer(**transformer_encoder_layers_cfg)
         self.encoder = nn.TransformerEncoder(encoder_layer, norm = nn.LayerNorm(self.encoder_embedding_dim), **transformer_encoder_cfg)
         self.post_extraction_mapper : Optional[nn.Module] = nn.Linear(feature_extractor.embedding_dim, self.encoder_embedding_dim) if feature_extractor.embedding_dim != self.encoder_embedding_dim else None
-
         self.pos_encoding_encoder = self._get_pos_embed_params(self.encoder_embedding_dim)
         
         self.pad_or_truncate_batch = pad_or_truncate_batch

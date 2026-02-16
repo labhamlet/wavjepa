@@ -1,0 +1,9 @@
+joblib
+yt-dlp
+torch
+torchaudio
+transformers
+gdown
+xmltodict
+pyannote.metrics
+pyannote.core
