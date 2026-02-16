@@ -129,7 +129,7 @@ def convolve_with_rir(waveform: torch.Tensor, rir: torch.Tensor) -> torch.Tensor
         return convolved[..., : waveform.shape[-1]]
 
 
-def fade_noise(noise_real_length: int, noise_source: torch.Tensor, audio_source: torch.Tensor, sr: int):
+def fade_noise(noise_source: torch.Tensor, audio_source: torch.Tensor, sr: int):
     """Facade function to determine what kind of fade-in and fade-out we should apply to the noise
     Arguments
     ---------
@@ -141,11 +141,10 @@ def fade_noise(noise_real_length: int, noise_source: torch.Tensor, audio_source:
         The sampling rate for both audio_source and noise_source
     """
 
-    if noise_real_length > audio_source.shape[-1]:
+    if noise_source.shape[-1] > audio_source.shape[-1]:
         # If noise is longer than the audio, pick a random segment
         # Because we cut the noise like that, apply a fadeout!
-        
-        start_idx_noise = torch.randint(0, noise_real_length - audio_source.shape[-1], (1,)).item()
+        start_idx_noise = torch.randint(0, noise_source.shape[-1] - audio_source.shape[-1], (1,)).item()
         noise_source = noise_source[start_idx_noise:start_idx_noise + audio_source.shape[-1]]
         noise_source = apply_fadeout(noise_source, sr=sr, duration=0.2)
     # Otherwise apply fade-in and fade-out

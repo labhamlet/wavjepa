@@ -4,8 +4,9 @@ import webdataset as wds
 import torch 
 import multiprocessing as mp 
 import queue
+import torchaudio 
 
-from dataset_functions import pre_process
+from .dataset_functions import pre_process
 
 from .scene_module import generate_scenes 
 
@@ -151,7 +152,7 @@ class RIRDataManager:
 
 
 
-class WebAudioDataModuleLMDB(pl.LightningDataModule):
+class WebAudioDataModuleDenoiser(pl.LightningDataModule):
     sr : int = 32000 
     in_channels: int = 1
     def __init__(
@@ -197,7 +198,19 @@ class WebAudioDataModuleLMDB(pl.LightningDataModule):
         """Augment sample with noise and RIR data."""
         
         audio, audio_sr = sample[0]
-        audio = pre_process(audio, audio_sr, self.sr)
+        audio = audio[0, :] if audio.ndim > 1 else audio
+        self.resampler = torchaudio.transforms.Resample(
+                        audio_sr,
+                        self.sr,
+                        lowpass_filter_width=64,
+                        rolloff=0.9475937167399596,
+                        resampling_method="sinc_interp_kaiser",
+                        dtype=audio.dtype,
+                        beta=14.769656459379492,
+                    )
+
+        audio = self.resampler(audio) if audio_sr != self.sr else audio
+        audio = pre_process(audio, self.sr).squeeze(0)
         # Initialize all variables
         noise = None 
         snr = None 
@@ -210,6 +223,7 @@ class WebAudioDataModuleLMDB(pl.LightningDataModule):
         
         # If with the noise, load the noise and fade it w.r.t audio's duration.
         if self.with_noise:
+            #SR is always 32000
             noise = next(self.noise_loader)
             noise = generate_scenes.fade_noise(noise, audio, self.sr)
 
@@ -219,9 +233,8 @@ class WebAudioDataModuleLMDB(pl.LightningDataModule):
                 new_agg_noise = torch.zeros_like(audio)
                 new_agg_noise[start_idx_noise:start_idx_noise + noise.shape[-1]] = noise
                 noise = new_agg_noise
-            snr_val = torch.distributions.uniform.Uniform(self.snr_low, self.snr_high).sample()
-            snr = torch.FloatTensor([self.in_channels]).fill_(snr_val)
-
+            snr = torch.distributions.uniform.Uniform(self.snr_low, self.snr_high).sample().item()
+            
         return audio, noise, source_rir, snr
     def make_web_dataset(self, path: str, split_scene: str, split_noise: str, shuffle: int):
         """Create a WebDataset pipeline for audio processing."""

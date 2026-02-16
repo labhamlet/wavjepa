@@ -2,8 +2,7 @@ defaults:
   - data: audioset_denoise
   - optimizer: adamW_denoise
   - trainer: denoise
-  - extractor : ConvFeatureExtractor
-  - masker : TimeInverseBlock
+  - extractor : wavjepa
 
 model: JEPA
 save_dir: /projects/0/prjs1338

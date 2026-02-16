@@ -10,7 +10,7 @@
 
 
 
-cd ~/phd/gitpull/wavjepa
+cd ~/phd/wavjepa
 module load 2023
 module load Anaconda3/2023.07-2
 source activate sjepa-eval

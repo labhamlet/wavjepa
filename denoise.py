@@ -7,7 +7,7 @@ from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from utils import get_identity_from_cfg
+from utils import get_identity_from_cfg_denoise
 from data_modules import WebAudioDataModuleDenoiser
 
 from wavjepa.jepa import JEPA
@@ -70,7 +70,6 @@ class ComponentFactory:
             lr=cfg.optimizer.lr,
             adam_betas=(cfg.optimizer.b1, cfg.optimizer.b2),
             adam_weight_decay=cfg.optimizer.weight_decay,
-            in_channels=cfg.data.in_channels,
             resample_sr=cfg.data.sr,
             process_audio_seconds=cfg.data.process_seconds,
             nr_samples_per_audio=cfg.data.samples_per_audio,
@@ -81,7 +80,7 @@ class ComponentFactory:
 
 def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
-    identity = get_identity_from_cfg(cfg)
+    identity = get_identity_from_cfg_denoise(cfg)
     return TensorBoardLogger(
         f"{cfg.save_dir}/tb_logs_jepa_denoised/",
         name=identity.replace("_", "/"),
@@ -90,7 +89,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
 
 def setup_callbacks(cfg):
     """Set up training callbacks."""
-    identity = get_identity_from_cfg(cfg)
+    identity = get_identity_from_cfg_denoise(cfg)
     
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"{cfg.save_dir}/saved_models_jepa_denoised/{identity.replace('_', '/')}",
@@ -209,7 +208,6 @@ def main(cfg):
 
         model.load_state_dict(new_state_dict, strict=False)
         model._set_teacher(cfg.trainer.teacher_ckpt_weights)            
-        model._compile()
 
         # Start training
         trainer.fit(model, data_module, ckpt_path=cfg.ckpt_path if "ckpt_path" in cfg else None)

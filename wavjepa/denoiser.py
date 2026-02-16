@@ -108,10 +108,9 @@ class Denoiser(pl.LightningModule):
     ):
         super().__init__(**kwargs)
         self.alpha=alpha
-        self.sr = self.resample_sr
+        self.sr = resample_sr
         self.target_audio_length = self.TARGET_SECONDS * self.sr
 
-        self.sr = resample_sr 
         self.process_audio_seconds = process_audio_seconds
         self.nr_samples_per_audio = nr_samples_per_audio
         self.target_length = int(resample_sr * process_audio_seconds)
@@ -261,9 +260,9 @@ class Denoiser(pl.LightningModule):
         # We know that the original sr is 32000.
         if self.sr != ORIGINAL_SR:
             generated_scene = resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
-            clean_scene = resample(clean_audio, resample_sr=self.sr, original_sr=ORIGINAL_SR)
+            clean_scene = resample(clean_audio, resample_sr=self.sr, original_sr = ORIGINAL_SR)
 
-        assert generated_scene.shape[1] <= self.in_channels, f"Generated scene has more channels than in channels, {generated_scene.shape}, {self.in_channels}"
+        assert generated_scene.shape[1] == 1, f"Generated scene has more channels than in channels, {generated_scene.shape}, 1"
         
 
         B, C, L_full = generated_scene.shape
