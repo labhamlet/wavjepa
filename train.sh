@@ -15,4 +15,4 @@ module load Anaconda3/2023.07-2
 source activate sjape
 
 
-python3 train.py masker=speech data=librispeech_no_rir_no_noise data.clean_data_ratio=1.0 extractor=ConvFeatureExtractor trainer.batch_size=16 trainer.num_gpus=1
+python3 train.py masker=LibriSpeech data=librispeech

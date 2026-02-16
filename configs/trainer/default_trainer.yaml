@@ -1,5 +1,5 @@
 epochs: -1
-batch_size: 16
+batch_size: 32
 accelerator: gpu
 steps: 375000
 precision: bf16-mixed
