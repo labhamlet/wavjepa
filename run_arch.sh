@@ -13,13 +13,10 @@ module load 2023
 module load Anaconda3/2023.07-2
 source activate sjepa-eval
 
-SLURM_ARRAY_TASK_ID=3
 tasks=(esc50 us8k fsd50k vivae fma_small magna_tag_a_tune irmas medleydb ravdess audio_mnist slurp emovo)
 
-task_idx=$((SLURM_ARRAY_TASK_ID))
-task_name=${tasks[$task_idx]}
+task_name=${tasks[$SLURM_ARRAY_TASK_ID]}
 
-
-weights=/gpfs/work4/0/prjs1338/saved_models_jepa_denoised_l2/InChannels=1/WithNoise=True/WithRIR=True/SNRl=-5/SNRh=5/CleanRatio=0.0/SR=16000/alpha=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0001/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=25000.ckpt
+weights=/gpfs/work4/0/prjs1338/saved_models_jepa_libri/Data=LibriSpeech/Extractor=wavjepa/InSeconds=2.01/BatchSize=32/NrSamples=8/NrGPUs=2/LR=0.0004/Masking=speech-masker/TargetProb=0.1/TargetLen=10/ContextLen=0/TopK=8/step=370000.ckpt
 
 python3 evaluate_wavjepa_model.py --weights $weights --device cuda --max_epochs 200 --verbose --tsv_logging_file results/wavjepa_time_full.tsv --n_iters 1 --data_config_file configs/datasets_config.json --enabled_datasets $task_name --precompute_embeddings

@@ -18,21 +18,14 @@ def load_model(*args, **kwargs):
             map_location=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
         )
 
-
-    if kwargs["extractor"] == "wav2vec2":
-        extractor = ConvFeatureExtractor(
-            conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)] + [(512,2,2)]"),
-            in_channels=1,
-        )
-    else:
-        extractor = ConvFeatureExtractor(
+    extractor = ConvFeatureExtractor(
             conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)]"),
             in_channels=1,
-        )    
+    )    
 
     model = RuntimeJEPA(
         in_channels=1,
-        process_seconds=float(kwargs["in_seconds"]),
+        process_seconds=2.01,
         weights=weights,
         sr=SR,
         model_size="base",

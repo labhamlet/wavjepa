@@ -61,15 +61,14 @@ model_size=base
 
 weights=/gpfs/work5/0/prjs1261/saved_models_jepa_reproduce/SR=16000/LibriRatio=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=25000.ckpt
 # weights=/projects/0/prjs1261/wavjepa_base_final/step=$ratio.ckpt
-model_options="{\"sr\": \"$sr\", \"model\": \"$model_size\"}"
 
 python3 -m heareval.embeddings.runner "$model_name" --tasks-dir "$task_dir" --task "$task_name" --embeddings-dir "$embeddings_dir" --model "$weights" --model-options "$model_options"
-python3 -m heareval.predictions.runner "$embeddings_dir/$model_name-sr=$sr-model=$model_size/$task_name"
+python3 -m heareval.predictions.runner "$embeddings_dir/$model_name/$task_name"
 
-mkdir -p "/projects/0/prjs1338/$score_dir/$model_name-sr=$sr-model=$model_size/$task_name"
+mkdir -p "/projects/0/prjs1338/$score_dir/$model_name/$task_name"
 
-mv "$embeddings_dir/$model_name-sr=$sr-model=$model_size/$task_name/test.predicted-scores.json" "/projects/0/prjs1338/$score_dir/$model_name-sr=$sr-model=$model_size/$task_name/"
-mv "$embeddings_dir/$model_name-sr=$sr-model=$model_size/$task_name/"*predictions.pkl "/projects/0/prjs1338/$score_dir/$model_name-sr=$sr-model=$model_size/$task_name/"
-mv "$embeddings_dir/$model_name-sr=$sr-model=$model_size/$task_name/"*embeddings.npy "/projects/0/prjs1338/$score_dir/$model_name-sr=$sr-model=$model_size/$task_name/"
+mv "$embeddings_dir/$model_name/$task_name/test.predicted-scores.json" "/projects/0/prjs1338/$score_dir/$model_name/$task_name/"
+mv "$embeddings_dir/$model_name/$task_name/"*predictions.pkl "/projects/0/prjs1338/$score_dir/$model_name/$task_name/"
+mv "$embeddings_dir/$model_name/$task_name/"*embeddings.npy "/projects/0/prjs1338/$score_dir/$model_name/$task_name/"
 
-rm -rf "$embeddings_dir/$model_name-sr=$sr-model=$model_size/$task_name"
+rm -rf "$embeddings_dir/$model_name/$task_name"
