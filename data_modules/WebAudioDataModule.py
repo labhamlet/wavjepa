@@ -5,7 +5,7 @@ from webdataset import RandomMix
 import torch
 import torch.nn.functional as F
 import torchaudio
-from .dataset_functions import pre_process
+from dataset_functions import pre_process
 
 
 class WebAudioDataModule(pl.LightningDataModule):

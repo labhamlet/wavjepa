@@ -1,14 +1,13 @@
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 import webdataset as wds
-from .dataset_functions import pre_process_audio
-from .scene_module import generate_scenes 
 import torch 
 import multiprocessing as mp 
 import queue
 
-from .dataset_functions import pre_process
+from dataset_functions import pre_process
 
+from .scene_module import generate_scenes 
 
 class NoiseDataManager:
     """Manages RIR data loading with multiprocessing in the main process."""

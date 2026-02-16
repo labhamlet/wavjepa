@@ -1,9 +1,5 @@
 import torch
 import torch.nn.functional as F
-import torchaudio.transforms as T
-
-
-
 
 def pad_or_truncate(feature: torch.Tensor, target_length: int) -> torch.Tensor:
     """
