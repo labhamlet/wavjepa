@@ -428,7 +428,11 @@ class EventPredictionModel(AbstractPredictionModel):
         self, epoch: int
     ) -> Tuple[Tuple[str, Any], ...]:
         if self.use_scoring_for_early_stopping:
-            return self.epoch_best_postprocessing[epoch]
+            try:
+                return self.epoch_best_postprocessing[epoch]
+            except KeyError:
+                print("Got key erorr with epoch number : {k} using the last epoch")
+                return self.epoch_best_postprocessing[epoch - 1]
         else:
             postprocessing_confs = list(ParameterGrid(self.postprocessing_grid))
             # There can only be one kind of postprocessing
