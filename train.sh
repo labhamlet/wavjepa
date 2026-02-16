@@ -3,7 +3,7 @@
 #SBATCH --gpus=2
 #SBATCH --job-name=JEPATargeLength
 #SBATCH --exclude=gcn131
-#SBATCH --time=66:00:00
+#SBATCH --time=50:00:00
 #SBATCH --output=slurm_output_%A_%a.out
 #SBATCH --array=0
 
@@ -15,4 +15,4 @@ module load Anaconda3/2023.07-2
 source activate sjape
 
 
-python3 train.py masker=LibriSpeech data=librispeech
+python3 train.py masker=AudioSet data=audioset masker.target_length=5

@@ -4,4 +4,4 @@ target_length : 10
 min_context_len: 5
 ratio_cutoff : 0.5
 channel_based_masking : False
-name: speech-masker
+name: audio-masker

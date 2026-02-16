@@ -4,7 +4,7 @@ import torch
 
 from wavjepa.audio_masking import compute_mask_indices
 
-class AudioMaskMaker(nn.Module):
+class AudioMasker(nn.Module):
     def __init__(
         self,
         target_masks_per_context : int = 4,

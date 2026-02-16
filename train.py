@@ -20,7 +20,7 @@ from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 # Component registries
 NETWORKS = {"JEPA": JEPA}
 MASKERS = {
-    "speech-masker": AudioMasker
+    "audio-masker": AudioMasker
 }
 EXTRACTORS = {
     "wav2vec2": ConvFeatureExtractor,
@@ -106,7 +106,6 @@ class ComponentFactory:
                 adam_weight_decay=cfg.optimizer.weight_decay,
                 resample_sr=cfg.data.sr,
                 process_audio_seconds=cfg.data.process_seconds,
-                use_gradient_checkpointing =cfg.trainer.use_gradient_checkpointing,
                 nr_samples_per_audio=cfg.data.samples_per_audio,
                 compile_modules = cfg.trainer.compile_modules,
                 average_top_k_layers = cfg.trainer.average_top_k_layers,
@@ -130,7 +129,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_new_masking/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=25000,
