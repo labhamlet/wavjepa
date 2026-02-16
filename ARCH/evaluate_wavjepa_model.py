@@ -73,9 +73,7 @@ model = JEPA(
     transformer_encoder_layers_cfg = TransformerLayerCFG.create(),
     transformer_decoder_cfg = TransformerEncoderCFG.create(),
     transformer_decoder_layers_cfg = TransformerLayerCFG.create(d_model = 384),
-    in_channels=1,
     resample_sr=16000,
-    is_spectrogram = False,
     process_audio_seconds = 2.01)
 
 new_state_dict = {}

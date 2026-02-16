@@ -66,13 +66,7 @@ class WavJEPAModelWrapper(Model):
 
     def get_embeddings(self, audio: np.ndarray, **kwargs):
         audio = audio.to(self.device)
-        if self.model.in_channels == 2:
-           audio = torch.cat((audio, audio), dim=0)
-           audio = audio.view(1, 2, -1)
-        elif self.model.in_channels == 1:
-            audio = audio.view(1,1,-1)
-        else:
-            raise Exception("Unknown channel")
+        audio = audio.view(1,1,-1)
         # Apply loudness normalization
         audio = normalize_audio(audio)
         if audio.ndim != 3:

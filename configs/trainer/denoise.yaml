@@ -6,4 +6,4 @@ precision: bf16-mixed
 num_gpus : 2
 size : base
 alpha : 0.0
-teacher_ckpt_weights : /gpfs/work5/0/prjs1261/wavjepa_base_final/step=375000.ckpt
+teacher_ckpt_weights : /gpfs/work5/0/prjs1261/saved_models_jepa_reproduce/SR=16000/LibriRatio=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=375000.ckpt

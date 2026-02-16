@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --partition=gpu_a100
+#SBATCH --partition=gpu_h100
 #SBATCH --gpus=1
 #SBATCH --job-name=MWMAE
 #SBATCH --ntasks=1
 #SBATCH --exclude=gcn118
-#SBATCH --time=00:05:00
+#SBATCH --time=04:00:00
 #SBATCH --output=hear/slurm_output_%A_%a.out
 #SBATCH --array=0
 
@@ -12,11 +12,25 @@ cd ~/phd/wavjepa
 module load 2023
 module load Anaconda3/2023.07-2
 source activate sjepa-eval
-cd listen-eval-kit
+cd hear-eval-kit
+
+grids=(
+# default
+# default
+fast
+# default
+# default
+# default
+# default
+# default
+# default
+# default
+# default
+)
 
 task_dirs=(
 # /projects/0/prjs1338/tasks
-# /projects/0/prjs1338/tasks
+/projects/0/prjs1338/tasks
 # /projects/0/prjs1261/tasks
 # /projects/0/prjs1338/tasks
 # /projects/0/prjs1338/tasks
@@ -30,7 +44,7 @@ task_dirs=(
 
 task_names=(
 # beijing_opera-v1.0-hear2021-full
-# dcase2016_task2-hear2021-full
+dcase2016_task2-hear2021-full
 # fsd50k-v1.0-full
 # esc50-v2.0.0-full
 # libricount-v1.0.0-hear2021-full
@@ -42,28 +56,21 @@ task_names=(
 # vox_lingua_top10-hear2021-full
 )
 
-ratios=(
-0.25
-0.5
-0.75
-1.0
-)
+task_name=${task_names[$SLURM_ARRAY_TASK_ID]}
+task_dir=${task_dirs[$SLURM_ARRAY_TASK_ID]}
+grid=${grids[$SLURM_ARRAY_TASK_ID]}
 
-task_name=vox_lingua_top10-hear2021-full
-task_dir=/projects/0/prjs1338/tasks
-ratio=${ratios[$SLURM_ARRAY_TASK_ID]}
-embeddings_dir="/projects/prjs1261/JepaEmbeddingsm"
-score_dir="hear_wavjepa_libri_m"
+embeddings_dir="/projects/prjs1261/JepaEmbeddings"
+score_dir="hear_wavjepa"
 
 model_name="hear_configs.WavJEPA"
 sr=16000
 model_size=base
 
-weights=/gpfs/work5/0/prjs1261/saved_models_jepa_reproduce/SR=16000/LibriRatio=0.0/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=25000.ckpt
-# weights=/projects/0/prjs1261/wavjepa_base_final/step=$ratio.ckpt
+weights=/gpfs/work4/0/prjs1338/saved_models_jepa_libri/Data=LibriSpeech/Extractor=wavjepa/InSeconds=2.01/BatchSize=32/NrSamples=8/NrGPUs=2/LR=0.0004/Masking=speech-masker/TargetProb=0.1/TargetLen=10/ContextLen=0/TopK=8/step=370000.ckpt
 
-python3 -m heareval.embeddings.runner "$model_name" --tasks-dir "$task_dir" --task "$task_name" --embeddings-dir "$embeddings_dir" --model "$weights" --model-options "$model_options"
-python3 -m heareval.predictions.runner "$embeddings_dir/$model_name/$task_name"
+python3 -m heareval.embeddings.runner "$model_name" --tasks-dir "$task_dir" --task "$task_name" --embeddings-dir "$embeddings_dir" --model "$weights"
+python3 -m heareval.predictions.runner "$embeddings_dir/$model_name/$task_name" --grid $grid
 
 mkdir -p "/projects/0/prjs1338/$score_dir/$model_name/$task_name"
 

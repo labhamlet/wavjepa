@@ -30,7 +30,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import sys
-sys.path.append("../../MWMAE")
+sys.path.append("../../wavjepa")
 
 import numpy as np
 import soundfile as sf
