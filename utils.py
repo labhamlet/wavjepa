@@ -16,7 +16,7 @@ def get_identity_from_cfg(cfg):
         cfg.masker.get("target_prob", 0.25),
         cfg.masker.get("target_length", 10),
         cfg.masker.get("min_context_len", 5),
-        cfg.trainer.get("ratio_cutoff", 0.15),
+        cfg.masker.get("ratio_cutoff", 0.15),
     )
     return identity
 
