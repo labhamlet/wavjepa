@@ -47,10 +47,11 @@ class AudioMasker(nn.Module):
     def forward(self, batch_size: int , n_times: int, in_channels: int):
         n_times = n_times // in_channels 
         target_positions = torch.zeros([batch_size, self.target_masks_per_context, n_times], dtype=torch.bool)
-        context_positions = torch.ones([batch_size, n_times], dtype=torch.bool)
+        context_positions = torch.zeros([batch_size, n_times], dtype=torch.bool)
 
         for batch_idx in range(batch_size):
             while True:
+                #Find the non context indices.
                 context = ~compute_mask_indices(
                                 shape = (1, n_times),
                                 padding_mask = None,
