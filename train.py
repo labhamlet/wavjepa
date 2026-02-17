@@ -11,7 +11,7 @@ from utils import get_identity_from_cfg
 from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
-from wavjepa.masking import AudioMasker, SpeechMasker
+from wavjepa.masking import AudioMasker, SpeechMasker, TimeInverseBlockMasker
 from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
@@ -85,11 +85,21 @@ class ComponentFactory:
                     channel_based_masking=cfg.masker.channel_based_masking,
                     min_context_len = cfg.masker.min_context_len,
                 )
+        elif cfg.masker.name == "time-inverse":
+            return TimeInverseBlockMasker(
+                    target_masks_per_context=cfg.masker.target_masks_per_context,
+                    context_mask_prob=cfg.masker.context_prob,
+                    context_mask_length=cfg.masker.context_length,
+                    target_prob=cfg.masker.target_prob,
+                    target_length=cfg.masker.target_length,
+                    ratio_cutoff=cfg.masker.ratio_cutoff,
+                    channel_based_masking=cfg.masker.channel_based_masking,
+                )            
         else:
             return AudioMasker(
                     target_masks_per_context=cfg.masker.target_masks_per_context,
-                    context_prob=cfg.masker.context_prob,
-                    context_length=cfg.masker.context_length,
+                    context_mask_prob=cfg.masker.context_prob,
+                    context_mask_length=cfg.masker.context_length,
                     target_prob=cfg.masker.target_prob,
                     target_length=cfg.masker.target_length,
                     ratio_cutoff=cfg.masker.ratio_cutoff,
