@@ -60,7 +60,8 @@ class FMASmall():
         # audio paths: df -> track_id
         audio_paths = tracks.index.values
         # 6-digit format for track_id
-        audio_paths = [os.path.join(self.audio_files_path, str(track_id).zfill(6) + '.mp3') for track_id in audio_paths]
+
+        audio_paths = [os.path.join(self.audio_files_path, str(track_id)[:3], str(track_id).zfill(6) + '.mp3') for track_id in audio_paths]
         # remove audio files that do not exist - take care of the labels
         audio_paths, labels = zip(*[(audio_path, label) for audio_path, label in zip(audio_paths, labels) if os.path.exists(audio_path)])
 

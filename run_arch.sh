@@ -13,6 +13,7 @@ module load 2023
 module load Anaconda3/2023.07-2
 source activate sjepa-eval
 
+SLURM_ARRAY_TASK_ID=4
 tasks=(esc50 us8k fsd50k vivae fma_small magna_tag_a_tune irmas medleydb ravdess audio_mnist slurp emovo)
 
 task_name=${tasks[$SLURM_ARRAY_TASK_ID]}
