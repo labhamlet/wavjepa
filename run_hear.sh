@@ -25,6 +25,7 @@ default
 default
 default
 default
+default
 )
 
 task_dirs=(
@@ -59,14 +60,14 @@ task_name=${task_names[$SLURM_ARRAY_TASK_ID]}
 task_dir=${task_dirs[$SLURM_ARRAY_TASK_ID]}
 grid=${grids[$SLURM_ARRAY_TASK_ID]}
 
-embeddings_dir="/projects/prjs1261/JepaEmbeddingsMew"
+embeddings_dir="/projects/prjs1261/JepaEmbeddingss"
 score_dir="hear_wavjepa"
 
 model_name="hear_configs.WavJEPA"
 sr=16000
 model_size=base
-
-weights=/gpfs/work5/0/prjs1261/saved_models_jepa_new_masking/Data=LibriSpeech/Extractor=wavjepa/InSeconds=2.01/BatchSize=32/NrSamples=8/NrGPUs=2/LR=0.0004/TargetProb=0.1/TargetLen=10/ContextLen=5/ContextRatio=0.15/step=25000.ckpt
+#Context ratio is actually 0.5
+weights=/gpfs/work5/0/prjs1261/saved_models_jepa_new_masking/Data=AudioSet/Extractor=wavjepa/InSeconds=2.01/BatchSize=32/NrSamples=8/NrGPUs=2/LR=0.0004/TargetProb=0.25/TargetLen=10/ContextProb=0.65/ContextLen=10/MinContextBlock=1/ContextRatio=0.1/step=200000.ckpt
 
 python3 -m heareval.embeddings.runner "$model_name" --tasks-dir "$task_dir" --task "$task_name" --embeddings-dir "$embeddings_dir" --model "$weights"
 python3 -m heareval.predictions.runner "$embeddings_dir/$model_name/$task_name" --grid $grid

@@ -15,4 +15,4 @@ module load Anaconda3/2023.07-2
 source activate sjape
 
 
-python3 train.py masker=AudioSet data=audioset masker.target_length=5
+python3 train.py masker=AudioSet data=audioset masker.target_length=10
