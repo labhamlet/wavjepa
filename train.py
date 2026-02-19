@@ -11,7 +11,7 @@ from utils import get_identity_from_cfg
 from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
-from wavjepa.masking import AudioMasker
+from wavjepa.masking import SpeechMasker, TimeInverseBlockMasker
 from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
@@ -20,7 +20,8 @@ from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 # Component registries
 NETWORKS = {"JEPA": JEPA}
 MASKERS = {
-    "speech-masker": AudioMasker
+    "time-inverse": TimeInverseBlockMasker,
+    "speech-masker": SpeechMasker
 }
 EXTRACTORS = {
     "wav2vec2": ConvFeatureExtractor,
@@ -75,14 +76,28 @@ class ComponentFactory:
                 f"Available maskers: {list(MASKERS.keys())}"
             )
         
-        return masker_class(
-                target_masks_per_context=cfg.masker.target_masks_per_context,
-                target_prob=cfg.masker.target_prob,
-                target_length=cfg.masker.target_length,
-                ratio_cutoff=cfg.masker.ratio_cutoff,
-                channel_based_masking=cfg.masker.channel_based_masking,
-                min_context_len = cfg.masker.min_context_len
-            )
+        if cfg.masker.name == "speech-masker":
+            return SpeechMasker(
+                    target_masks_per_context=cfg.masker.target_masks_per_context,
+                    target_prob=cfg.masker.target_prob,
+                    target_length=cfg.masker.target_length,
+                    ratio_cutoff=cfg.masker.ratio_cutoff,
+                    channel_based_masking=cfg.masker.channel_based_masking,
+                    min_context_len = cfg.masker.min_context_len,
+                )
+        elif cfg.masker.name == "time-inverse":
+            return TimeInverseBlockMasker(
+                    target_masks_per_context=cfg.masker.target_masks_per_context,
+                    context_mask_prob=cfg.masker.context_prob,
+                    context_mask_length=cfg.masker.context_length,
+                    target_prob=cfg.masker.target_prob,
+                    target_length=cfg.masker.target_length,
+                    ratio_cutoff=cfg.masker.ratio_cutoff,
+                    channel_based_masking=cfg.masker.channel_based_masking,
+                )            
+        else:
+            raise Exception("No masker found")
+
     
     @staticmethod
     def create_network(cfg, extractor : Extractor) -> JEPA:
@@ -106,7 +121,6 @@ class ComponentFactory:
                 adam_weight_decay=cfg.optimizer.weight_decay,
                 resample_sr=cfg.data.sr,
                 process_audio_seconds=cfg.data.process_seconds,
-                use_gradient_checkpointing =cfg.trainer.use_gradient_checkpointing,
                 nr_samples_per_audio=cfg.data.samples_per_audio,
                 compile_modules = cfg.trainer.compile_modules,
                 average_top_k_layers = cfg.trainer.average_top_k_layers,
@@ -130,7 +144,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_new_masking/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=25000,

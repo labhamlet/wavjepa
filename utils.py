@@ -12,11 +12,13 @@ def get_identity_from_cfg(cfg):
         cfg.trainer.get("num_gpus"),
         cfg.optimizer.get("lr"),
     )
-    identity += "TargetProb={}_TargetLen={}_ContextLen={}_ContextRatio={}".format(
+    identity += "TargetProb={}_TargetLen={}_ContextProb={}_ContextLen={}_MinContextBlock={}_ContextRatio={}".format(
         cfg.masker.get("target_prob", 0.25),
         cfg.masker.get("target_length", 10),
-        cfg.masker.get("min_context_len", 5),
-        cfg.trainer.get("ratio_cutoff", 0.15),
+        cfg.masker.get("context_prob", 0.65),
+        cfg.masker.get("context_len", 10),
+        cfg.masker.get("min_context_len", 1),
+        cfg.masker.get("ratio_cutoff", 0.1),
     )
     return identity
 
