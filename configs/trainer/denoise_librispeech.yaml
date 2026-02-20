@@ -1,0 +1,9 @@
+epochs: -1
+batch_size: 32
+accelerator: gpu
+steps: 100000
+precision: bf16-mixed
+num_gpus : 2
+size : base
+alpha : 0.0
+teacher_ckpt_weights : /gpfs/work4/0/prjs1338/saved_models_jepa_libri/Data=LibriSpeech/Extractor=wavjepa/InSeconds=2.01/BatchSize=32/NrSamples=8/NrGPUs=2/LR=0.0004/Masking=speech-masker/TargetProb=0.1/TargetLen=10/ContextLen=0/TopK=8/step=370000.ckpt

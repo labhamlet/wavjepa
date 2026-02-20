@@ -6,7 +6,7 @@
 #SBATCH --exclude=gcn118
 #SBATCH --time=08:00:00
 #SBATCH --output=xares/slurm_output_%A_%a.out
-#SBATCH --array=0-19
+#SBATCH --array=[0,7,18]
 
 cd /projects/0/prjs1261/xares_gyuksel3/xares
 
