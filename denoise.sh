@@ -15,4 +15,8 @@ module load Anaconda3/2023.07-2
 source activate sjape
 
 
-python3 denoise.py data=librispeech_denoise trainer=denoise_librispeech trainer.batch_size=32 trainer.num_gpus=2 trainer.alpha=0.0 data.with_rir=True trainer.steps=100000
+#For librispeech
+python3 denoise.py data=librispeech_denoise trainer=denoise_librispeech
+
+#For AudioSet
+python3 denoise.py data=audioset_denoise trainer=denoise_audioset
