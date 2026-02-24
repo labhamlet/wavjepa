@@ -107,32 +107,82 @@ def process_audio(source_rir : torch.Tensor,
     agg_noise = agg_noise[:, :, :input_length]
     return convolved_source, agg_noise
 
+def add_noise(source, noise, snr, start_idx, real_noise_length):
+    """
+    Vectorized SNR mixing for batches with different noise positions and lengths.
+    
+    Arguments:
+        source: (B, 1, T) - The clean speech
+        noise: (B, 1, T) - The noise (already padded/convolved)
+        snr: (B, 1) or float
+        start_idx: (B,) Tensor of start indices
+        real_noise_length: (B,) Tensor of noise durations
+    """
+    B, C, T = source.shape
+    device = source.device
 
-def generate_scene(source_rir, source, noise, snr):
+    if not isinstance(start_idx, torch.Tensor):
+        start_idx = torch.tensor([start_idx] * B, device=device)
+    if not isinstance(real_noise_length, torch.Tensor):
+        real_noise_length = torch.tensor([real_noise_length] * B, device=device)
+
+    t_indices = torch.arange(T, device=device).view(1, 1, -1) # (1, 1, T)
+
+    # Boolean mask: True where noise is active
+    # (B, 1, T)
+    mask = (t_indices >= start_idx.view(B, 1, 1)) & \
+           (t_indices < (start_idx + real_noise_length).view(B, 1, 1))
+
+    norm_x_active = torch.linalg.vector_norm(source * mask, ord=2, dim=-1, keepdim=True)
+    norm_n_active = torch.linalg.vector_norm(noise * mask, ord=2, dim=-1, keepdim=True)
+
+    if not isinstance(snr, torch.Tensor):
+        snr_tensor = torch.tensor(snr, device=device).view(B, 1, 1)
+    else:
+        snr_tensor = snr.view(B, 1, 1)
+
+    # 4. Calculate 'a' per batch sample
+    # a = sqrt( (||x_active||^2 / ||n_active||^2) * 10^(-SNR/10) )
+    energy_ratio = (norm_x_active**2) / (norm_n_active**2 + 1e-9)
+    scale_factor = 10 ** (-snr_tensor / 10.0)
+    
+    a = torch.sqrt(energy_ratio * scale_factor)
+
+    return source + a * noise
+
+def generate_scene(source_rir, 
+                   noise_rirs, 
+                   source, 
+                   noise,
+                   real_noise_length,
+                   noise_start_idx,
+                   snr):
+    """
+    Generates a scene based on provided RIRs and Noise.
+    Ensures output is consistently (B, 1, T).
+    """
     # Case 1: Both source RIR and noise exist
     if source_rir[0] is not None and noise[0] is not None:
-        assert noise.ndim == 2
-        assert source.ndim == 2
-        assert snr.ndim == 1, f"Got snr dim {snr.shape}"
-        source = F.add_noise(source, noise, snr)
-        # We get the first channel of the ambisonics RIRs
-        convolved_source = convolve_with_rir(source, source_rir[:, [0], :])
-        return convolved_source
-
+        convolved_source, agg_noise = process_audio(
+            source_rir[:, [0], :], 
+            noise_rirs[:, :, [0], :], 
+            audio_source=source, 
+            noise_source=noise
+        )
+    
+        # Apply Segmental SNR mixing
+        return add_noise(convolved_source, agg_noise, snr, noise_start_idx, real_noise_length)
+    
     # Case 2: Only source RIR exists (no noise)
     elif source_rir[0] is not None and noise[0] is None:
-        # Get the firt
-        assert source.ndim == 2
         convolved_source = convolve_with_rir(source, source_rir[:, [0], :])
         return convolved_source
-
+    
     # Case 3: Only noise exists (no source RIR)
     elif source_rir[0] is None and noise[0] is not None:
-        # Add channel dim
-        assert source.ndim == 2
-        assert noise.ndim == 2
-        return F.add_noise(source, noise, snr)
-
-    # Case 4: Neither source RIR nor noise exists, return one channel audio
-    else:  # source_rir[0] is None and noise[0] is None
+        # Use add_noise on the raw source
+        return add_noise(source, noise, snr, noise_start_idx, real_noise_length)
+    
+    # Case 4: Neither source RIR nor noise exists
+    else:
         return source
