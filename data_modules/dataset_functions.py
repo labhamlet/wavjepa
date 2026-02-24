@@ -112,3 +112,8 @@ def pre_process(waveform, sr):
     elif padding < 0:
         waveform = waveform[:, : sr * 10]
     return waveform
+
+def pre_process_noise(waveform):
+    # Normalize the audio using RMSE
+    waveform = normalize_audio(waveform, -14.0)
+    return waveform

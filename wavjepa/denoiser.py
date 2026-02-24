@@ -230,38 +230,42 @@ class Denoiser(pl.LightningModule):
 
         (
             audio,
-            noise,
             source_rir,
+            noise,
+            noise_length, 
+            noise_start_idx,
+            noise_rirs,
             snr,
         ) = batch
-    
 
         generated_scene = generate_scenes_batch.generate_scene(
-            source_rir=source_rir,
-            source=audio,
-            noise=noise,
-            snr=snr       
+            source_rir=source_rir, 
+            source=audio, 
+            noise=noise, 
+            real_noise_length=noise_length, 
+            noise_start_idx=noise_start_idx,
+            noise_rirs=noise_rirs, 
+            snr=snr
         )
-  
-        generated_scene = self.pad_or_truncate_batch(generated_scene, 10 * ORIGINAL_SR)
 
-        #Add channel dimension to the final audio as well.
+        # Add channel dimension to the final audio as well.
         if audio.ndim != 3:
-            final_audio = audio.unsqueeze(1)
+            audio = audio.unsqueeze(1)
         if generated_scene.ndim != 3:
             generated_scene = generated_scene.unsqueeze(1)
-        
-        assert generated_scene.ndim == final_audio.ndim
+        assert generated_scene.ndim == audio.ndim
 
+        # Initialize clean_scene unconditionally
+        clean_scene = audio
 
-        clean_audio = pad_or_truncate_batch(final_audio, 10 * ORIGINAL_SR)
         # We know that the original sr is 32000.
-        if self.sr != ORIGINAL_SR:
-            generated_scene = resample(generated_scene, resample_sr = self.sr, original_sr = ORIGINAL_SR)
-            clean_scene = resample(clean_audio, resample_sr=self.sr, original_sr = ORIGINAL_SR)
+        if self.sr != self.ORIGINAL_SR:
+            # Note: verify the kwargs of your resample function! 
+            # If using torchaudio.functional.resample, kwargs are `orig_freq` and `new_freq`.
+            generated_scene = resample(generated_scene, resample_sr=self.sr, original_sr=self.ORIGINAL_SR)
+            clean_scene = resample(clean_scene, resample_sr=self.sr, original_sr=self.ORIGINAL_SR)
 
         assert generated_scene.shape[1] == 1, f"Generated scene has more channels than in channels, {generated_scene.shape}, 1"
-        
 
         B, C, L_full = generated_scene.shape
 

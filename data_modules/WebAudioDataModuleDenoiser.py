@@ -6,7 +6,7 @@ import multiprocessing as mp
 import queue
 import torchaudio 
 
-from .dataset_functions import pre_process
+from .dataset_functions import pre_process, pre_process_noise
 
 from .scene_module import generate_scenes 
 
@@ -213,29 +213,35 @@ class WebAudioDataModuleDenoiser(pl.LightningDataModule):
         audio = pre_process(audio, self.sr).squeeze(0)
         # Initialize all variables
         noise = None 
+        noise_rirs = None
         snr = None 
         source_rir = None
+        noise_start_idx = 0
+        noise_length = 0
 
-        # If with the rir, load the rir.
         if self.with_rir:
             rirs = next(self.rir_loader)
             source_rir = rirs[0]
         
-        # If with the noise, load the noise and fade it w.r.t audio's duration.
         if self.with_noise:
-            #SR is always 32000
+            if self.with_rir:
+                noise_rirs = rirs[1:]
             noise = next(self.noise_loader)
+            noise = pre_process_noise(noise)
+            #This function already handles the randomly cropping noise to match audio length 
+            #if noise is bigger than the audio length.
             noise = generate_scenes.fade_noise(noise, audio, self.sr)
-
-            # If audio is bigger than noise, then place the noise in a random location of the audio
+            noise_length = noise.shape[-1]
+            # If audio is bigger than noise, then we will place the noise in a random location of the audio
             if audio.shape[-1] > noise.shape[-1]:
-                start_idx_noise = torch.randint(0, audio.shape[-1] - noise.shape[-1], (1,))
+                noise_start_idx = torch.randint(0, audio.shape[-1] - noise.shape[-1], (1,)).item()
                 new_agg_noise = torch.zeros_like(audio)
-                new_agg_noise[start_idx_noise:start_idx_noise + noise.shape[-1]] = noise
+                new_agg_noise[noise_start_idx:noise_start_idx + noise.shape[-1]] = noise
                 noise = new_agg_noise
             snr = torch.distributions.uniform.Uniform(self.snr_low, self.snr_high).sample().item()
-            
-        return audio, noise, source_rir, snr
+        
+
+        return audio, source_rir, noise, noise_length, noise_start_idx, noise_rirs, snr
     def make_web_dataset(self, path: str, split_scene: str, split_noise: str, shuffle: int):
         """Create a WebDataset pipeline for audio processing."""
         dataset = (

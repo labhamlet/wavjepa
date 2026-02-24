@@ -19,4 +19,4 @@ source activate sjape
 python3 denoise.py data=librispeech_denoise trainer=denoise_librispeech
 
 #For AudioSet
-python3 denoise.py data=audioset_denoise trainer=denoise_audioset
+# python3 denoise.py data=audioset_denoise trainer=denoise_audioset

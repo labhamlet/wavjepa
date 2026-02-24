@@ -6,6 +6,5 @@ defaults:
   - masker : AudioSet
 
 model: JEPA
-save_dir: /projects/0/prjs1261
+save_dir: /projects/0/prjs1338
 seed: 42
-ckpt_path: /gpfs/work4/0/prjs1338/saved_models_jepa_denoised/InChannels=1/WithNoise=True/WithRIR=True/SNRl=-5/SNRh=5/CleanRatio=0.0/SR=16000/BatchSize=32/NrSamples=8/NrGPUs=2/ModelSize=base/LR=0.0004/Masking=time-inverse-masker/TargetProb=0.25/TargetLen=10/ContextLen=10/TopK=8/step=7500.ckpt
