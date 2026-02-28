@@ -15,4 +15,4 @@ module load Anaconda3/2023.07-2
 source activate sjape
 
 
-python3 train.py masker=LibriSpeech data=librispeech trainer.batch_size=64 extractor=wav2vec2 data.process_seconds=2.01 trainer.num_gpus=2
+python3 train.py masker=AudioSet data=audioset trainer.batch_size=32 extractor=wavjepa data.process_seconds=2.01 trainer.num_gpus=2

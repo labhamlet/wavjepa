@@ -34,11 +34,10 @@ ENCODERS = {
     }
 }
 
-torch.set_float32_matmul_precision("medium")
+torch.set_float32_matmul_precision("high")
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-
 
 # Enable cuDNN benchmarking for consistent input sizes
 torch.backends.cudnn.benchmark = True
@@ -88,8 +87,8 @@ class ComponentFactory:
         elif cfg.masker.name == "time-inverse":
             return TimeInverseBlockMasker(
                     target_masks_per_context=cfg.masker.target_masks_per_context,
-                    context_mask_prob=cfg.masker.context_prob,
-                    context_mask_length=cfg.masker.context_length,
+                    context_mask_prob=cfg.masker.context_mask_prob,
+                    context_mask_length=cfg.masker.context_mask_length,
                     target_prob=cfg.masker.target_prob,
                     target_length=cfg.masker.target_length,
                     ratio_cutoff=cfg.masker.ratio_cutoff,
@@ -134,7 +133,7 @@ def setup_logger(cfg) -> TensorBoardLogger:
     """Set up TensorBoard logger with proper configuration."""
     identity = get_identity_from_cfg(cfg)
     return TensorBoardLogger(
-        f"{cfg.save_dir}/tb_logs_jepa",
+        f"{cfg.save_dir}/tb_logs_jepa_repro",
         name=identity.replace("_", "/"),
     )
 
@@ -144,7 +143,7 @@ def setup_callbacks(cfg):
     identity = get_identity_from_cfg(cfg)
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{cfg.save_dir}/saved_models_jepa_new_masking/{identity.replace('_', '/')}",
+        dirpath=f"{cfg.save_dir}/saved_models_jepa_repro/{identity.replace('_', '/')}",
         filename="{step}",
         verbose=True,
         every_n_train_steps=25000,

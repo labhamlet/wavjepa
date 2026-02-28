@@ -15,11 +15,11 @@ from wavjepa.pos_embed import get_1d_sincos_pos_embed_from_grid
 from wavjepa.functions import trunc_normal_
 from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
-
-torch._dynamo.config.capture_dynamic_output_shape_ops = True
+from data_modules.dataset_functions import pad_or_truncate_batch
 
 def collate_fn(batch : List[torch.Tensor]) -> torch.Tensor:
     return batch.flatten(start_dim = 0, end_dim = 1)
+
 
 class JEPA(pl.LightningModule):
     """
@@ -85,9 +85,9 @@ class JEPA(pl.LightningModule):
         ema_decay: float = 0.999,
         ema_end_decay: float = 0.99999,
         ema_anneal_end_step: int = 100000,
-        average_top_k_layers: int = 12,
+        average_top_k_layers: int = 8,
         resample_sr : int = 16000,
-        process_audio_seconds: float = 2.00,
+        process_audio_seconds: float = 2.01,
         nr_samples_per_audio = 16,
         use_gradient_checkpointing: bool = False,
         compile_modules : bool = False,
@@ -117,7 +117,6 @@ class JEPA(pl.LightningModule):
             transformer_encoder_layers_cfg["dim_feedforward"] = 1024 * 4
             transformer_encoder_cfg["num_layers"] = 24
 
-
         self.n_encoder_heads = transformer_encoder_layers_cfg["nhead"]
         self.encoder_embedding_dim = transformer_encoder_layers_cfg["d_model"]
         self.n_decoder_heads = transformer_decoder_layers_cfg["nhead"]
@@ -125,7 +124,7 @@ class JEPA(pl.LightningModule):
 
         encoder_layer = nn.TransformerEncoderLayer(**transformer_encoder_layers_cfg)
         self.encoder = nn.TransformerEncoder(encoder_layer, norm = nn.LayerNorm(self.encoder_embedding_dim), **transformer_encoder_cfg)
-        self.post_extraction_mapper : Optional[nn.Module] = nn.Linear(feature_extractor.embedding_dim, self.encoder_embedding_dim) if feature_extractor.embedding_dim != self.encoder_embedding_dim else None
+        self.post_extraction_mapper : Optional[nn.Module] = nn.Linear(feature_extractor.embedding_dim, self.encoder_embedding_dim)
         decoder_layer = nn.TransformerEncoderLayer(**transformer_decoder_layers_cfg)
         self.decoder = nn.TransformerEncoder(decoder_layer, norm = nn.LayerNorm(self.decoder_embedding_dim), **transformer_decoder_cfg)
         self.decoder_to_encoder_mapper = nn.Linear(self.decoder_embedding_dim, self.encoder_embedding_dim, bias=True)
@@ -141,11 +140,13 @@ class JEPA(pl.LightningModule):
 
         self.apply(self._init_weights)
         self._init_teacher()
+
         if compile_modules:
             self._compile_operations()
-            self.collate_fn = torch.compile(collate_fn)
-        else:
-            self.collate_fn = collate_fn
+        
+        self.collate_fn = collate_fn
+        self.pad_or_truncate_batch = pad_or_truncate_batch
+
 
     def _init_weights(self, m : nn.Module):
         if isinstance(m, nn.Linear):
@@ -198,19 +199,16 @@ class JEPA(pl.LightningModule):
             teacher.data.mul_(r).add_((1 - r) * student.detach().data)
 
     def _compile_operations(self):
-        """
-        Use torch.compile on the extractor, encoder and decoder blocks for faster forward
-        """
-        try:
-            self.encoder_forward = torch.compile(self.encoder_forward, fullgraph=True)
-            self.decoder_forward = torch.compile(self.decoder_forward, fullgraph=True)
-            self._forward_teacher = torch.compile(self._forward_teacher, fullgraph=True)
-            self.extract_audio = torch.compile(self.extract_audio)
-            self.masked_loss = torch.compile(self.masked_loss)
-
-        except Exception as e:
-            print(f"Warning: Could not compile operations: {e}")
-            self.use_compiled_forward = False
+            """
+            Compile inner modules to avoid PyTorch Lightning hook graph breaks.
+            """
+            _compile_opts = dict(
+                fullgraph=True,
+                mode="max-autotune",
+            )
+            self.encoder = torch.compile(self.encoder, **_compile_opts)
+            self.decoder = torch.compile(self.decoder, **_compile_opts)
+            self.teacher_encoder = torch.compile(self.teacher_encoder, **_compile_opts)
 
     def configure_optimizers(self):
         trainables = [p for p in self.parameters() if p.requires_grad]
@@ -253,7 +251,7 @@ class JEPA(pl.LightningModule):
         return y
 
     @torch.no_grad()
-    def _forward_teacher(self, x : torch.Tensor) -> torch.Tensor:
+    def _forward_teacher(self, x: torch.Tensor) -> torch.Tensor:
         layer_outputs = []
         for i, bl in enumerate(self.teacher_encoder.layers): # type: ignore
             x : torch.Tensor = bl(x)
@@ -269,24 +267,33 @@ class JEPA(pl.LightningModule):
             targets = layer_outputs[-1]
         return targets
 
-    def get_aug_prob(self):
-        return 1 - (self.global_step / self.trainer.max_steps)
-
     def on_after_batch_transfer(self, batch, dataloader_idx):
         """
         Runs on GPU. Splits batch by SR, resamples, recombines.
         """
+
+        def index_select_and_normalize(audio, indices):
+            audio = audio.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
+            return_audio = torch.gather(audio, 3, indices)
+
+            mean = return_audio.mean(dim=(-2, -1), keepdim=True)
+            std = return_audio.std(dim=(-2, -1), keepdim=True)
+            normalized = (return_audio - mean) / (std + 1e-5) # Add epsilon for stability
+            return normalized 
+
         (
-            audio_batch,
+            audio,
             ctx_masks,
             target_indices,
-            ctx_and_target_masks,
+            ctx_and_target_masks
         ) = batch
-        
-        if audio_batch.ndim != 3:
-            audio_batch = audio_batch.unsqueeze(1)
-        
-        B, C, L_full = audio_batch.shape
+
+
+        if audio.ndim != 3:
+            audio = audio.unsqueeze(1)
+
+        B, C, L_full = audio.shape
+
         # Generate all random start indices at once
         rand_starts = torch.randint(
             0, L_full - self.target_length + 1,
@@ -297,32 +304,26 @@ class JEPA(pl.LightningModule):
         # Create indices for gathering
         # Shape: (B, nr_samples, target_length)
         indices = rand_starts.unsqueeze(-1) + torch.arange(self.target_length, device=self.device)
-        indices_expanded = indices.unsqueeze(2).expand(-1, -1, C, -1)
-
-        clean_scene_expanded = audio_batch.unsqueeze(1).expand(-1, self.nr_samples_per_audio, -1, -1)
-
-        return_clean_audios = torch.gather(clean_scene_expanded, 3, indices_expanded)
-
-        mean = return_clean_audios.mean(dim=(-2, -1), keepdim=True)
-        std = return_clean_audios.std(dim=(-2, -1), keepdim=True)
-        normalized_clean_audios = (return_clean_audios - mean) / (std + 1e-5) # Add epsilon for stability
-
+        indices = indices.unsqueeze(2).expand(-1, -1, C, -1)
+        normalized_clean_audios = index_select_and_normalize(audio, indices)
         # Cast to bfloat16 and flatten batch and samples dimensions
         flattened_clean = self.collate_fn(normalized_clean_audios.to(torch.bfloat16))
 
         # Shuffle the samples
         idx = torch.randperm(flattened_clean.size(0))
-
         return flattened_clean[idx, ...], self.collate_fn(ctx_masks), self.collate_fn(target_indices), self.collate_fn(ctx_and_target_masks)
 
-    def training_step(self, batch: torch.Tensor, batch_idx: int) -> ForwardReturn:
-        audio_input, ctx_masks, target_indices, ctx_and_target_masks = batch
-        out = self(audio_input,ctx_masks, target_indices, ctx_and_target_masks)
 
-        # Enhanced logging
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> ForwardReturn:
+        audio, ctx_masks, target_indices, ctx_and_target_masks = batch
+        out = self(audio, ctx_masks, target_indices, ctx_and_target_masks)
+
         log_data = {
             "train/loss": out['loss'],
+            "train/loss_clean": out["loss_clean"],
+            "train/loss_noisy": out["loss_consistency"],
             "ema" : self._get_ema_decay(),
+            "lambda" : self._get_current_lambda(),
         }
             
         self.log_dict(log_data, prog_bar=True, sync_dist=True)
@@ -343,101 +344,98 @@ class JEPA(pl.LightningModule):
         B, N, _ = target_indices.shape
         D = pred.shape[-1]
 
-        pred_reshaped = pred.view(B, N, -1, D)
+        pred_reshaped = pred.view(B, N, -1, D)           # (B, N, T, D)
+        target = target.unsqueeze(1).expand(B, N, -1, D)         # (B, N, T, D) — view, no copy
 
-        # This makes it broadcastable to the shape of pred_reshaped [B, N, T, D] during the loss
-        
-        target = repeat(target, "B T D -> B N T D", N = N)
-        loss = self.loss_fn(pred_reshaped, target)  # -> Shape: [B, N, T, D]
-
-        loss_per_timestep = loss.mean(dim=-1)  # -> Shape: [B, N, T]
-
-        # No rearrange is needed for the mask.
-        masked_loss_tensor = loss_per_timestep * target_indices  # -> Shape: [B, N, T]
-
-        # Calculate the final mean loss over only the masked elements.
-        total_loss = masked_loss_tensor.sum()
-        indices_count = target_indices.sum()
-
-        return total_loss / (indices_count + 1e-8)
+        loss = self.loss_fn(pred_reshaped, target)        # (B, N, T, D)
+        loss_per_timestep = loss.mean(dim=-1)             # (B, N, T)
+        masked = loss_per_timestep * target_indices       # (B, N, T)
+        return masked.sum() / (target_indices.sum() + 1e-8)
     
-
-    def forward(self, audio : torch.Tensor, ctx_masks, target_indices, ctx_and_target_masks) -> ForwardReturn:
+    def _student_head_forward(self, 
+                                local_features, 
+                                ctx_masks, 
+                                ctx_tgt_masks, 
+                                nr_targets):
         """
-        Args:
-            batch: torch.Tensor
-                audio data
-
-        Returns:
-            output: dict with keys:
-
-                * loss: scalar
-                * local_features: (batch_size, n_patches, emb_dim)
-                    Output of ``feature_encoder``. Shared between teacher and student.
-                * contextual_features: (batch_size, n_patches, emb_dim) if compute_loss=False, (batch_size, n_contexts_per_input, n_context_patches, emb_dim) if compute_loss=True.
-                    Outpyt of the student ``tramnsformer.encoder``.
-                * preds: (batch_size, n_contexts_per_input, n_targets_per_context, n_target_patches, emb_dim)
-                    Output of the student transformer (encoder+decoder).
-                * targets: (batch_size, n_patches, emb_dim)
-                    Average of the outputs of the last k layers of the
-                    teacher ``transformer.encoder``.
-                * idxs_context: (batch_size, n_contexts_per_input, n_context_patches)
-                    Indices of the unmasked patches to use to compute the contextual features.
-                * idxs_target: (batch_size, n_contexts_per_input, n_targets_per_context, n_target_patches)
-                    Indices of the patches that must be predicted by the student.
+        Helper method to allow torch.compile compatible checkpointing.
         """
-        # # Compute the local representations from the waveform
-        # This extract audio can be also channel based, if it is channel based the channel are flatten to the sequencel length
-        local_features = self.extract_audio(audio)
-        local_features = self.feature_norms(local_features)
-        if self.post_extraction_mapper is not None:
-            local_features = self.post_extraction_mapper(local_features)
+        local_features = local_features.contiguous()
+        ctx_masks = ctx_masks.contiguous()
+        if ctx_tgt_masks is not None:
+            ctx_tgt_masks = ctx_tgt_masks.contiguous()
+
+        contextual_features = self.encoder_forward(
+            local_features, 
+            src_key_padding_mask=ctx_masks
+        )
         
-        local_features = local_features + self.pos_encoding_encoder
-        contextual_features = self.encoder_forward(local_features, src_key_padding_mask=ctx_masks)
-        # Accumulate contextual features on the batch dimensions
-        contextual_features = contextual_features[~ctx_masks]
         contextual_features = self.encoder_to_decoder_mapper(contextual_features)
         
-        preds = self.decoder_forward(contextual_features, 
-                                     ctx_masks, 
-                                     nr_targets = target_indices.shape[1], 
-                                     src_key_padding_mask=ctx_and_target_masks)
+        return self.decoder_forward(
+            contextual_features, 
+            ctx_masks, 
+            nr_targets=nr_targets, 
+            src_key_padding_mask=ctx_tgt_masks
+        )
+    
+    def _extract_audio_embeddings(self, audio):
+        feats = self.extract_audio(audio)
+        feats = self.feature_norms(feats)
+        feats = self.post_extraction_mapper(feats)
+        return feats 
+    
+    def forward(self, audio: torch.Tensor, ctx_masks, target_indices, ctx_and_target_masks) -> ForwardReturn:
+        with torch.no_grad():
+            audio_embeddings_teacher = self._extract_audio_embeddings(audio) + self.pos_encoding_encoder
+            targets = self._forward_teacher(audio_embeddings_teacher)
+            del audio_embeddings_teacher 
+
+        nr_targets = target_indices.shape[1]
+        audio_embeddings = self._extract_audio_embeddings(audio) + self.pos_encoding_encoder
         
-        # Compute the training targets using the teacher.
-        x_targets = local_features.detach()
-        targets = self._forward_teacher(x_targets)
+
+        if self.use_gradient_checkpointing:
+            preds = checkpoint(
+                self._student_head_forward,
+                audio_embeddings, 
+                ctx_masks, 
+                ctx_and_target_masks, 
+                nr_targets,
+                use_reentrant=True
+            )
+        else:
+            preds = self._student_head_forward(
+                audio_embeddings, 
+                ctx_masks, 
+                ctx_and_target_masks, 
+                nr_targets, 
+            )
 
         loss = self.masked_loss(preds, targets, target_indices)
         
         return ForwardReturn(
-            local_features=local_features,
-            contextual_features=contextual_features,
             loss=loss,
-            preds=preds,
-            targets=targets,
         )
 
+    def decoder_forward(self, contextual_features, ctx_mask, nr_targets, src_key_padding_mask=None):
+        B, seq_len = ctx_mask.shape
+        E = self.decoder_embedding_dim
 
-    def decoder_forward(self, contextual_features: torch.Tensor, ctx_mask: torch.BoolTensor, nr_targets : int, src_key_padding_mask : Optional[torch.BoolTensor] = None) -> torch.Tensor:
-        B = ctx_mask.shape[0]
-        # Prepare the mask tokens.
-        tgt = self.mask_token.repeat(B, self.total_patches, 1).type_as(contextual_features) # (B, seq_len, decoder_dim)
-        #Get the context tokens.
-        tgt[~ctx_mask, :] = contextual_features.reshape((-1, self.decoder_embedding_dim))
-        tgt = tgt.reshape((B, -1, self.decoder_embedding_dim))
-        # Add positional encoding to the decoder
+        # Start from all mask tokens
+        tgt = self.mask_token.expand(B, seq_len, E)                # (B, T, E)
+
+        # Blend context in via masking — no boolean indexing
+        ctx_mask_f = (~ctx_mask).unsqueeze(-1).to(contextual_features.dtype)  # (B, T, 1)
+        tgt = tgt * ctx_mask.unsqueeze(-1).to(tgt.dtype) + contextual_features * ctx_mask_f
+
+        # Repeat for each target block
+        tgt = repeat(tgt, 'B S E -> (B N) S E', N=nr_targets)
+        src_key_padding_mask = rearrange(src_key_padding_mask, 'B N S -> (B N) S')
+
         tgt = tgt + self.pos_encoding_decoder
-
-        # Repeat the context for every target, and absorb into batch dimension
-        tgt = repeat(tgt, 'B Seq Emb -> B T Seq Emb', T = nr_targets)
-        tgt = rearrange(tgt, 'B T Seq Emb -> (B T) Seq Emb')
-        src_key_padding_mask = rearrange(src_key_padding_mask, 'B T Seq1 -> (B T) Seq1')
-        
-        #Decoder only attends to context tokens and target mask tokens.
-        tgt = self.decoder(tgt, src_key_padding_mask = src_key_padding_mask)
-        preds = self.decoder_to_encoder_mapper(tgt)
-        return preds
+        tgt = self.decoder(tgt, src_key_padding_mask=src_key_padding_mask)
+        return self.decoder_to_encoder_mapper(tgt)
 
 
     #TODO use flex attention
@@ -445,17 +443,12 @@ class JEPA(pl.LightningModule):
     x_contexts: torch.Tensor, 
     src_key_padding_mask : Optional[torch.BoolTensor] = None
     ) -> torch.Tensor:
-
-        if self.use_gradient_checkpointing and self.training:
-            contextual_features = checkpoint(self.encoder, x_contexts, use_reentrant=False)
-        else:
-            contextual_features = self.encoder(x_contexts, src_key_padding_mask = src_key_padding_mask)
-
+        contextual_features = self.encoder(x_contexts, 
+                                           src_key_padding_mask = src_key_padding_mask)
         return contextual_features
 
     @torch.inference_mode()
     def get_audio_representation(self, audio : torch.Tensor, padding_mask : torch.tensor):
-        # Get the audio representatin of waveform x.
         self.eval()
         local_features = self.extract_audio(audio)
         local_features = self.feature_norms(local_features)
