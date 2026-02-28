@@ -204,7 +204,7 @@ class JEPA(pl.LightningModule):
             """
             _compile_opts = dict(
                 fullgraph=True,
-                mode="max-autotune",
+                mode="reduce-overhead",
             )
             self.encoder = torch.compile(self.encoder, **_compile_opts)
             self.decoder = torch.compile(self.decoder, **_compile_opts)
@@ -320,10 +320,7 @@ class JEPA(pl.LightningModule):
 
         log_data = {
             "train/loss": out['loss'],
-            "train/loss_clean": out["loss_clean"],
-            "train/loss_noisy": out["loss_consistency"],
             "ema" : self._get_ema_decay(),
-            "lambda" : self._get_current_lambda(),
         }
             
         self.log_dict(log_data, prog_bar=True, sync_dist=True)
@@ -389,7 +386,6 @@ class JEPA(pl.LightningModule):
         with torch.no_grad():
             audio_embeddings_teacher = self._extract_audio_embeddings(audio) + self.pos_encoding_encoder
             targets = self._forward_teacher(audio_embeddings_teacher)
-            del audio_embeddings_teacher 
 
         nr_targets = target_indices.shape[1]
         audio_embeddings = self._extract_audio_embeddings(audio) + self.pos_encoding_encoder
