@@ -6,7 +6,6 @@ import torch
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 
-from wavjepa.callbacks import StepTimer
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from utils import get_identity_from_cfg
@@ -197,8 +196,7 @@ def setup_callbacks(cfg):
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
     # Per-step wall time and DataLoader wait, logged to TensorBoard and printed every N steps.
-    step_timer = StepTimer(print_every=int(cfg.trainer.get("print_step_time_every", 20)))
-    return [checkpoint_callback, lr_monitor, step_timer]
+    return [checkpoint_callback, lr_monitor]
 
 
 def setup_trainer(cfg, logger, callbacks) -> pl.Trainer:
