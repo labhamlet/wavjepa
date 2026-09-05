@@ -1,6 +1,8 @@
 import copy
-import transformers 
-import numpy as np 
+import math
+import transformers
+import numpy as np
+import torchaudio
 
 from typing import List, Any, Optional
 
@@ -17,9 +19,59 @@ from wavjepa.extractors.audio_extractor import Extractor
 from wavjepa.types import ForwardReturn, TransformerLayerCFG, TransformerEncoderCFG
 
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
+# Packed sequence lengths vary in multiples of ``pad_multiple``; give dynamo room
+# to keep one graph per distinct (dynamic) shape it still decides to specialise on.
+torch._dynamo.config.cache_size_limit = 64
+
+#: Kaiser-window sinc resampling parameters shared with the legacy CPU loader path
+#: (``data_modules/WebAudioDataModule.py``) so that GPU and CPU resampling match.
+RESAMPLE_KWARGS: dict[str, Any] = dict(
+    lowpass_filter_width=64,
+    rolloff=0.9475937167399596,
+    resampling_method="sinc_interp_kaiser",
+    beta=14.769656459379492,
+)
 
 def collate_fn(batch : List[torch.Tensor]) -> torch.Tensor:
     return batch.flatten(start_dim = 0, end_dim = 1)
+
+
+def pack_tokens(
+    x: torch.Tensor, keep: torch.Tensor, pad_multiple: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Gather the kept tokens of every row to the front of a shorter, padded sequence.
+
+    Args:
+        x: (B, S, E) tokens (positional embeddings must already be added).
+        keep: (B, S) bool, True = keep this token.
+        pad_multiple: the packed length ``L`` is rounded up to a multiple of this
+            (bounded by ``S``) so that ``torch.compile(dynamic=True)`` sees few
+            distinct shapes.
+
+    Returns:
+        x_packed: (B, L, E) kept tokens first, in their original order; pad slots are 0.
+        idx: (B, L) int64 original position of every packed slot (in-range also for
+            pad slots, so they can be used with ``gather``/``scatter``).
+        pad: (B, L) bool True = pad slot (use as ``src_key_padding_mask``).
+
+    ``L = min(S, ceil(max_b keep_b.sum() / pad_multiple) * pad_multiple)``. Iterating
+    ``(b, l)`` over ``~pad`` in row-major order visits the kept tokens in the same
+    order as ``x[keep]`` (row-major over ``(b, s)``), which the decoder scatter and
+    the loss rely on.
+    """
+    B, S, E = x.shape
+    n_keep = keep.sum(dim=1)                                       # (B,)
+    L = int(n_keep.max().item())                                   # eager: .item()
+    L = min(S, int(math.ceil(L / pad_multiple)) * pad_multiple)
+    # Stable sort: kept positions first, original order preserved within each group.
+    order = torch.argsort(~keep, dim=1, stable=True)              # (B, S)
+    idx = order[:, :L]                                             # (B, L)
+    pad = torch.arange(L, device=x.device)[None, :] >= n_keep[:, None]  # (B, L)
+    x_packed = torch.gather(x, 1, idx.unsqueeze(-1).expand(-1, -1, E))
+    x_packed = x_packed.masked_fill(pad.unsqueeze(-1), 0.0)
+    return x_packed, idx, pad
+
 
 class JEPA(pl.LightningModule):
     """
@@ -67,6 +119,18 @@ class JEPA(pl.LightningModule):
             The targets are the average of the outputs of the last k layers of
             the teacher encoder. This parameter specifies the number of layers to
             use for the average.
+        use_packing: bool
+            Run the student encoder/decoder only on the visible tokens (gathered
+            into a shorter padded sequence) instead of the full sequence with a
+            key-padding mask. Same loss, fewer FLOPs. ``False`` = original path.
+        pad_multiple: int
+            Packed sequence lengths are rounded up to a multiple of this.
+        masker: nn.Module | None
+            Vectorised mask generator with a ``sample(batch_size, n_times,
+            in_channels, device, generator)`` method (see ``wavjepa/masking.py``).
+            Only needed for the native dict batch path of
+            :meth:`on_after_batch_transfer`; ``None`` for inference / the legacy
+            tuple path.
     """
     teacher_encoder: nn.Module
     def __init__(
@@ -79,7 +143,7 @@ class JEPA(pl.LightningModule):
         decoder_embedding_dim : int = 512,
         loss_fn: nn.Module = nn.MSELoss(reduction='none'),
         lr: float = 0.0002,
-        adam_betas: tuple[float, float] = (0.9, 0.98),        
+        adam_betas: tuple[float, float] = (0.9, 0.98),
         adam_eps: float = 1e-06,
         adam_weight_decay: float = 0.01,
         ema_decay: float = 0.999,
@@ -92,26 +156,42 @@ class JEPA(pl.LightningModule):
         use_gradient_checkpointing: bool = False,
         compile_modules : bool = False,
         size : str = "base",
+        use_packing: bool = True,
+        pad_multiple: int = 32,
+        masker: nn.Module | None = None,
         **kwargs : dict[str, Any],
     ):
         super().__init__(**kwargs)
-        self.sr = resample_sr 
+        self.sr = resample_sr
         self.nr_samples_per_audio = nr_samples_per_audio
         self.ema_end_step = ema_anneal_end_step
         self.target_length = int(resample_sr * process_audio_seconds)
         self.total_patches = feature_extractor.total_patches(self.target_length)
         self.use_compiled_forward = compile_modules
         self.use_gradient_checkpointing = use_gradient_checkpointing
+        self.use_packing = use_packing
+        self.pad_multiple = int(pad_multiple)
         self.save_hyperparameters(
-            ignore=["feature_encoder", "feature_extractor", "loss_fn"]
+            ignore=["feature_encoder", "feature_extractor", "loss_fn", "masker"]
         )
         self.extract_audio = feature_extractor
         self.feature_norms : nn.Module = nn.LayerNorm(self.extract_audio.embedding_dim)
         self.loss_fn = loss_fn
+        # Mask generator for the native batch path (no parameters/buffers, so the
+        # state_dict keys are unchanged). ``None`` keeps inference / legacy usage.
+        self.masker = masker
+        # ``n_times`` handed to the masker is divided by the extractor's channel count.
+        self._masker_in_channels = int(getattr(feature_extractor, "in_channels", 1) or 1)
+        # Native-rate resampling: one ``torchaudio.transforms.Resample`` per source
+        # sr, built lazily on the module's device. Kept in a plain dict on purpose so
+        # they are NOT registered as submodules (state_dict keys stay the same).
+        self._resamplers: dict[int, torchaudio.transforms.Resample] = {}
+        # Per-rank RNG for crops / permutation / masks (created lazily on the device).
+        self._generator: torch.Generator | None = None
 
 
         # If size is large, then alter the encoder parameters to mimic VIT-Large. Should results in ~300m parameters.
-        if size == "large": 
+        if size == "large":
             transformer_encoder_layers_cfg["nhead"] = 16
             transformer_encoder_layers_cfg["d_model"] = 1024
             transformer_encoder_layers_cfg["dim_feedforward"] = 1024 * 4
@@ -192,21 +272,33 @@ class JEPA(pl.LightningModule):
 
     @torch.no_grad()
     def _step_teacher(self):
+        """EMA update ``teacher = r * teacher + (1 - r) * student`` with fused foreach ops."""
         r = self._get_ema_decay()
-        for student, teacher in zip(self.encoder.parameters(), 
-                                    self.teacher_encoder.parameters()):
-            teacher.data.mul_(r).add_((1 - r) * student.detach().data)
+        teacher_params = [p for p in self.teacher_encoder.parameters()]
+        student_params = [p.detach() for p in self.encoder.parameters()]
+        torch._foreach_mul_(teacher_params, r)
+        torch._foreach_add_(teacher_params, student_params, alpha=1 - r)
 
     def _compile_operations(self):
         """
-        Use torch.compile on the extractor, encoder and decoder blocks for faster forward
+        Use torch.compile on the extractor, encoder and decoder blocks for faster forward.
+
+        Packed path: the encoder/decoder *core* calls see sequence lengths that vary
+        in multiples of ``pad_multiple``, so they are compiled with ``dynamic=True``;
+        the pack/gather code (``.item()``, boolean indexing) and the packed loss stay
+        eager. The teacher (fixed full-sequence shape) keeps its fullgraph compile.
         """
         try:
-            self.encoder_forward = torch.compile(self.encoder_forward, fullgraph=True)
-            self.decoder_forward = torch.compile(self.decoder_forward, fullgraph=True)
+            torch._dynamo.config.cache_size_limit = 64
+            if self.use_packing:
+                self._encoder_core = torch.compile(self._encoder_core, dynamic=True)
+                self._decoder_core = torch.compile(self._decoder_core, dynamic=True)
+            else:
+                self.encoder_forward = torch.compile(self.encoder_forward, fullgraph=True)
+                self.decoder_forward = torch.compile(self.decoder_forward, fullgraph=True)
+                self.masked_loss = torch.compile(self.masked_loss)
             self._forward_teacher = torch.compile(self._forward_teacher, fullgraph=True)
             self.extract_audio = torch.compile(self.extract_audio)
-            self.masked_loss = torch.compile(self.masked_loss)
 
         except Exception as e:
             print(f"Warning: Could not compile operations: {e}")
@@ -229,7 +321,7 @@ class JEPA(pl.LightningModule):
 
     def _make_targets(self, layer_outputs : List[torch.Tensor]):
         """
-        Predicting targets which are the average of multiple layers is more robust than 
+        Predicting targets which are the average of multiple layers is more robust than
         predicting only the top most layer (K = 1) for most modalities.
         Args:
             layer_outputs: average_top_k_layers * (batch_size, n_patches, emb_dim)
@@ -272,20 +364,170 @@ class JEPA(pl.LightningModule):
     def get_aug_prob(self):
         return 1 - (self.global_step / self.trainer.max_steps)
 
+    @staticmethod
+    def _same_device(a: torch.device, b: torch.device) -> bool:
+        """``cuda`` and ``cuda:0`` count as the same device (a generator always carries an index)."""
+        return a.type == b.type and (a.index is None or b.index is None or a.index == b.index)
+
+    def _get_generator(self, device: torch.device | str | None = None) -> torch.Generator:
+        """Per-rank ``torch.Generator`` on ``device`` (default: the module's device), lazily created.
+
+        Seeded with ``torch.initial_seed() + global_rank`` so DDP ranks draw
+        different crops / permutations / masks even though ``seed_everything``
+        gives every rank the same main-process seed. Re-created (and re-seeded)
+        only if the module moved to another device after the first use.
+        """
+        device = torch.device(self.device if device is None else device)
+        gen = self._generator
+        if gen is None or not self._same_device(torch.device(gen.device), device):
+            gen = torch.Generator(device=device)
+            gen.manual_seed(int(torch.initial_seed() + int(self.global_rank)) % (2**63 - 1))
+            self._generator = gen
+        return gen
+
+    def _get_resampler(self, orig_sr: int, device: torch.device) -> torchaudio.transforms.Resample:
+        """Cached ``Resample(orig_sr -> self.sr)`` (kaiser params of the legacy path) on ``device``."""
+        key = int(orig_sr)
+        resampler = self._resamplers.get(key)
+        if resampler is None:
+            resampler = torchaudio.transforms.Resample(
+                key, self.sr, dtype=torch.float32, **RESAMPLE_KWARGS
+            )
+            self._resamplers[key] = resampler
+        if resampler.kernel.device != device:
+            resampler.to(device)
+        return resampler
+
+    @torch.no_grad()
+    def _prepare_wave16k(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        """Native-rate dict batch -> ``(wave (B, sr*10) float32, valid (B,) int64)``.
+
+        1. Rows are grouped by native ``sr``; each group is cropped to ``sr*10``
+           samples, resampled to ``self.sr`` (skipped when ``sr == self.sr``) with the
+           cached kaiser ``Resample`` and cropped/zero-padded to ``self.sr*10``.
+           Runs outside autocast, in float32 and with cuDNN TF32 disabled so that the
+           result matches the CPU ``Resample`` of the legacy loader.
+        2. Every row is RMS-normalised to -14 dBFS like
+           ``dataset_functions.normalize_audio`` but using only its ``valid`` samples
+           (``round(length / sr * self.sr)``), i.e. as if normalisation ran before
+           zero padding. Rows with ``rms == 0`` are left unchanged.
+        """
+        audio: torch.Tensor = batch["audio"]
+        sr: torch.Tensor = batch["sr"]
+        length: torch.Tensor = batch["length"]
+        if audio.ndim == 3:  # (B, 1, L) -> (B, L)
+            audio = audio[:, 0, :]
+        device = audio.device
+        B = audio.shape[0]
+        out_len = int(self.sr * 10)
+        sr = sr.to(device=device, dtype=torch.int64)
+        length = length.to(device=device, dtype=torch.int64)
+
+        wave = torch.zeros(B, out_len, dtype=torch.float32, device=device)
+        cudnn = torch.backends.cudnn
+        with torch.autocast(device_type=device.type, enabled=False), cudnn.flags(
+            enabled=cudnn.enabled,
+            benchmark=False,
+            benchmark_limit=cudnn.benchmark_limit,
+            deterministic=cudnn.deterministic,
+            allow_tf32=False,
+        ):
+            for s in torch.unique(sr).tolist():
+                s = int(s)
+                rows = torch.nonzero(sr == s, as_tuple=True)[0]
+                x = audio[rows, : s * 10].to(torch.float32)
+                if s != self.sr:
+                    x = self._get_resampler(s, device)(x)
+                n = x.shape[-1]
+                if n >= out_len:
+                    wave[rows] = x[:, :out_len]
+                else:
+                    wave[rows, :n] = x
+
+            # valid samples per row at self.sr (round like the DESIGN contract)
+            valid = torch.round(length.to(torch.float64) * self.sr / sr.to(torch.float64)).to(torch.int64)
+            valid = valid.clamp_(min=0, max=out_len)
+            valid_mask = torch.arange(out_len, device=device)[None, :] < valid[:, None]   # (B, out_len)
+
+            # RMS to -14 dBFS over the valid samples only (== normalize_audio before padding)
+            sq_sum = (wave * wave * valid_mask).sum(dim=1)
+            rms = torch.sqrt(sq_sum / valid.clamp(min=1).to(torch.float32))              # (B,)
+            safe_rms = torch.where(rms > 0, rms, torch.ones_like(rms))
+            current_dBFS = 20 * torch.log10(safe_rms)
+            gain_dB = -14.0 - current_dBFS
+            gain_linear = 10 ** (gain_dB / 20)
+            gain_linear = torch.where(rms > 0, gain_linear, torch.ones_like(gain_linear))
+            wave = wave * gain_linear[:, None]
+        return wave, valid
+
+    def _crop_and_mask(self, audio_batch: torch.Tensor):
+        """Native path steps 3-5: random crops, standardise, bf16, GPU masks, shuffle.
+
+        Args:
+            audio_batch: (B, C, L) float waveform at ``self.sr``.
+        Returns:
+            ``(audio (B*n, C, target_length) bf16, ctx (B*n, S), tgt (B*n, N, S),
+            ctx_tgt (B*n, N, S))`` with every row shuffled by one permutation.
+        """
+        if self.masker is None or not hasattr(self.masker, "sample"):
+            raise RuntimeError(
+                "JEPA.on_after_batch_transfer got a native dict batch but no vectorised "
+                "`masker` (with a `.sample` method) was passed to the constructor."
+            )
+        device = audio_batch.device
+        gen = self._get_generator(device)
+        B, C, L_full = audio_batch.shape
+        n = self.nr_samples_per_audio
+        rand_starts = torch.randint(
+            0, L_full - self.target_length + 1, (B, n), device=device, generator=gen
+        )
+        indices = rand_starts.unsqueeze(-1) + torch.arange(self.target_length, device=device)
+        indices_expanded = indices.unsqueeze(2).expand(-1, -1, C, -1)
+        expanded = audio_batch.unsqueeze(1).expand(-1, n, -1, -1)
+        crops = torch.gather(expanded, 3, indices_expanded)                    # (B, n, C, T)
+
+        mean = crops.mean(dim=(-2, -1), keepdim=True)
+        std = crops.std(dim=(-2, -1), keepdim=True)
+        crops = (crops - mean) / (std + 1e-5)
+
+        flattened = self.collate_fn(crops.to(torch.bfloat16))                  # (B*n, C, T)
+        total = flattened.shape[0]
+
+        ctx_masks, target_indices, ctx_and_target_masks = self.masker.sample(
+            total, self.total_patches, in_channels=self._masker_in_channels,
+            device=device, generator=gen,
+        )
+        perm = torch.randperm(total, device=device, generator=gen)
+        return (
+            flattened[perm],
+            ctx_masks[perm].to(torch.bool),
+            target_indices[perm].to(torch.bool),
+            ctx_and_target_masks[perm].to(torch.bool),
+        )
+
     def on_after_batch_transfer(self, batch, dataloader_idx):
         """
         Runs on GPU. Splits batch by SR, resamples, recombines.
+
+        * ``dict`` batch (native loader, ``{"audio", "sr", "length"}``): GPU resample
+          + RMS normalisation (:meth:`_prepare_wave16k`), then the 8-crop logic and
+          the vectorised masker on the device (:meth:`_crop_and_mask`).
+        * ``tuple`` batch (legacy loader): the original code path, unchanged.
         """
+        if isinstance(batch, dict):
+            wave, _valid = self._prepare_wave16k(batch)
+            return self._crop_and_mask(wave.unsqueeze(1))
+
         (
             audio_batch,
             ctx_masks,
             target_indices,
             ctx_and_target_masks,
         ) = batch
-        
+
         if audio_batch.ndim != 3:
             audio_batch = audio_batch.unsqueeze(1)
-        
+
         B, C, L_full = audio_batch.shape
         # Generate all random start indices at once
         rand_starts = torch.randint(
@@ -324,12 +566,20 @@ class JEPA(pl.LightningModule):
             "train/loss": out['loss'],
             "ema" : self._get_ema_decay(),
         }
-            
+
         self.log_dict(log_data, prog_bar=True, sync_dist=True)
 
-        with torch.amp.autocast('cuda', enabled=False):  # Force FP32 computation for stability
-            self._step_teacher()
-        
+        # EMA of the student -> teacher once per OPTIMIZER step. With gradient accumulation the
+        # student only changes every `accumulate_grad_batches` micro-batches, so updating on every
+        # micro-batch would just apply the decay several times per step; this keeps the original
+        # cadence (update on the last micro-batch, i.e. with the pre-step student weights).
+        accumulate = 1
+        if self._trainer is not None:
+            accumulate = int(getattr(self.trainer, "accumulate_grad_batches", 1) or 1)
+        if (batch_idx + 1) % accumulate == 0:
+            with torch.amp.autocast('cuda', enabled=False):  # Force FP32 computation for stability
+                self._step_teacher()
+
         return out
 
     def masked_loss(self, pred, target, target_indices):
@@ -346,7 +596,7 @@ class JEPA(pl.LightningModule):
         pred_reshaped = pred.view(B, N, -1, D)
 
         # This makes it broadcastable to the shape of pred_reshaped [B, N, T, D] during the loss
-        
+
         target = repeat(target, "B T D -> B N T D", N = N)
         loss = self.loss_fn(pred_reshaped, target)  # -> Shape: [B, N, T, D]
 
@@ -360,7 +610,37 @@ class JEPA(pl.LightningModule):
         indices_count = target_indices.sum()
 
         return total_loss / (indices_count + 1e-8)
-    
+
+    def masked_loss_packed(
+        self,
+        preds_packed: torch.Tensor,
+        targets: torch.Tensor,
+        target_indices: torch.Tensor,
+        idx2: torch.Tensor,
+        pad2: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Loss of the packed decoder output; equals :meth:`masked_loss` on the unpacked
+        predictions because every target position is decoder-visible (hence packed)
+        and the loss only counts target positions.
+
+        preds_packed:   [(B * N), L2, D] packed decoder predictions
+        targets:        [B, S, D] teacher targets (full sequence)
+        target_indices: [B, N, S] bool, True = target position
+        idx2 / pad2:    [(B * N), L2] original position / pad flag of each packed slot
+        """
+        B, N, S = target_indices.shape
+        D = targets.shape[-1]
+        targets_rep = repeat(targets, "B S D -> (B N) S D", N=N)
+        gathered_targets = torch.gather(targets_rep, 1, idx2.unsqueeze(-1).expand(-1, -1, D))
+        target_mask = rearrange(target_indices, "B N S -> (B N) S")
+        tmask = torch.gather(target_mask, 1, idx2) & ~pad2                     # (B*N, L2)
+
+        loss = self.loss_fn(preds_packed, gathered_targets)                    # (B*N, L2, D)
+        loss_per_timestep = loss.mean(dim=-1)                                  # (B*N, L2)
+        masked_loss_tensor = loss_per_timestep * tmask
+        return masked_loss_tensor.sum() / (tmask.sum() + 1e-8)
+
 
     def forward(self, audio : torch.Tensor, ctx_masks, target_indices, ctx_and_target_masks) -> ForwardReturn:
         """
@@ -378,6 +658,9 @@ class JEPA(pl.LightningModule):
                     Outpyt of the student ``tramnsformer.encoder``.
                 * preds: (batch_size, n_contexts_per_input, n_targets_per_context, n_target_patches, emb_dim)
                     Output of the student transformer (encoder+decoder).
+                    With ``use_packing`` this is the packed ``(B*N, L2, emb_dim)`` tensor
+                    and ``preds_idx`` / ``preds_pad`` ``(B*N, L2)`` give the original
+                    position / pad flag of every slot.
                 * targets: (batch_size, n_patches, emb_dim)
                     Average of the outputs of the last k layers of the
                     teacher ``transformer.encoder``.
@@ -392,24 +675,55 @@ class JEPA(pl.LightningModule):
         local_features = self.feature_norms(local_features)
         if self.post_extraction_mapper is not None:
             local_features = self.post_extraction_mapper(local_features)
-        
+
         local_features = local_features + self.pos_encoding_encoder
+
+        if self.use_packing:
+            # Student encoder on the context tokens only -> (n_ctx_total, E_enc),
+            # row-major (b, position) order like ``contextual_features[~ctx_masks]``.
+            contextual_features = self.encoder_forward_packed(local_features, ctx_masks)
+            contextual_features = self.encoder_to_decoder_mapper(contextual_features)
+
+            preds, preds_idx, preds_pad = self.decoder_forward_packed(
+                contextual_features,
+                ctx_masks,
+                nr_targets=target_indices.shape[1],
+                ctx_and_target_masks=ctx_and_target_masks,
+            )
+
+            # Compute the training targets using the teacher (full sequence).
+            x_targets = local_features.detach()
+            targets = self._forward_teacher(x_targets)
+
+            loss = self.masked_loss_packed(preds, targets, target_indices, preds_idx, preds_pad)
+
+            out = ForwardReturn(
+                local_features=local_features,
+                contextual_features=contextual_features,
+                loss=loss,
+                preds=preds,
+                targets=targets,
+            )
+            out["preds_idx"] = preds_idx
+            out["preds_pad"] = preds_pad
+            return out
+
         contextual_features = self.encoder_forward(local_features, src_key_padding_mask=ctx_masks)
         # Accumulate contextual features on the batch dimensions
         contextual_features = contextual_features[~ctx_masks]
         contextual_features = self.encoder_to_decoder_mapper(contextual_features)
-        
-        preds = self.decoder_forward(contextual_features, 
-                                     ctx_masks, 
-                                     nr_targets = target_indices.shape[1], 
+
+        preds = self.decoder_forward(contextual_features,
+                                     ctx_masks,
+                                     nr_targets = target_indices.shape[1],
                                      src_key_padding_mask=ctx_and_target_masks)
-        
+
         # Compute the training targets using the teacher.
         x_targets = local_features.detach()
         targets = self._forward_teacher(x_targets)
 
         loss = self.masked_loss(preds, targets, target_indices)
-        
+
         return ForwardReturn(
             local_features=local_features,
             contextual_features=contextual_features,
@@ -433,7 +747,7 @@ class JEPA(pl.LightningModule):
         tgt = repeat(tgt, 'B Seq Emb -> B T Seq Emb', T = nr_targets)
         tgt = rearrange(tgt, 'B T Seq Emb -> (B T) Seq Emb')
         src_key_padding_mask = rearrange(src_key_padding_mask, 'B T Seq1 -> (B T) Seq1')
-        
+
         #Decoder only attends to context tokens and target mask tokens.
         tgt = self.decoder(tgt, src_key_padding_mask = src_key_padding_mask)
         preds = self.decoder_to_encoder_mapper(tgt)
@@ -441,8 +755,8 @@ class JEPA(pl.LightningModule):
 
 
     #TODO use flex attention
-    def encoder_forward(self, 
-    x_contexts: torch.Tensor, 
+    def encoder_forward(self,
+    x_contexts: torch.Tensor,
     src_key_padding_mask : Optional[torch.BoolTensor] = None
     ) -> torch.Tensor:
 
@@ -452,6 +766,71 @@ class JEPA(pl.LightningModule):
             contextual_features = self.encoder(x_contexts, src_key_padding_mask = src_key_padding_mask)
 
         return contextual_features
+
+    # ------------------------------------------------------------------ #
+    # Packed path (DESIGN.md section C)
+    # ------------------------------------------------------------------ #
+    def _encoder_core(self, x_packed: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
+        """Student encoder on a packed batch; compiled with ``dynamic=True`` when enabled."""
+        if self.use_gradient_checkpointing and self.training:
+            return checkpoint(self.encoder, x_packed, None, pad, use_reentrant=False)
+        return self.encoder(x_packed, src_key_padding_mask=pad)
+
+    def _decoder_core(self, tgt_packed: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
+        """Decoder on a packed batch; compiled with ``dynamic=True`` when enabled."""
+        return self.decoder(tgt_packed, src_key_padding_mask=pad)
+
+    def encoder_forward_packed(self, local_features: torch.Tensor, ctx_masks: torch.Tensor) -> torch.Tensor:
+        """
+        Run the student encoder on the context tokens only.
+
+        Args:
+            local_features: (B, S, E) tokens with positional embeddings added.
+            ctx_masks: (B, S) bool, True = NOT context.
+        Returns:
+            (n_ctx_total, E) encoder outputs of the context tokens in row-major
+            ``(b, position)`` order -- identical ordering to
+            ``self.encoder(...)[~ctx_masks]`` of the unpacked path.
+        """
+        x_packed, _idx, pad = pack_tokens(local_features, ~ctx_masks, self.pad_multiple)
+        out = self._encoder_core(x_packed, pad)
+        return out[~pad]
+
+    def decoder_forward_packed(
+        self,
+        contextual_features: torch.Tensor,
+        ctx_mask: torch.Tensor,
+        nr_targets: int,
+        ctx_and_target_masks: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Decoder on the decoder-visible tokens (context + target mask tokens) only.
+
+        Args:
+            contextual_features: (n_ctx_total, E_dec) context tokens already mapped to
+                the decoder width (same layout as :meth:`decoder_forward`).
+            ctx_mask: (B, S) bool, True = NOT context.
+            nr_targets: T, target groups per row.
+            ctx_and_target_masks: (B, T, S) bool, True = NOT visible to the decoder.
+        Returns:
+            ``(preds_packed (B*T, L2, E_enc), idx2 (B*T, L2) int64, pad2 (B*T, L2) bool)``.
+        """
+        B = ctx_mask.shape[0]
+        # Prepare the mask tokens and blend in the context (exactly as decoder_forward).
+        tgt = self.mask_token.repeat(B, self.total_patches, 1).type_as(contextual_features)
+        tgt[~ctx_mask, :] = contextual_features.reshape((-1, self.decoder_embedding_dim))
+        tgt = tgt.reshape((B, -1, self.decoder_embedding_dim))
+        tgt = tgt + self.pos_encoding_decoder
+
+        # Repeat the context for every target group and absorb into the batch dim.
+        tgt = repeat(tgt, 'B Seq Emb -> B T Seq Emb', T=nr_targets)
+        tgt = rearrange(tgt, 'B T Seq Emb -> (B T) Seq Emb')
+        keep = ~rearrange(ctx_and_target_masks, 'B T Seq1 -> (B T) Seq1')
+
+        tgt_packed, idx2, pad2 = pack_tokens(tgt, keep, self.pad_multiple)
+        out = self._decoder_core(tgt_packed, pad2)
+        preds = self.decoder_to_encoder_mapper(out)
+        return preds, idx2, pad2
 
     @torch.inference_mode()
     def get_audio_representation(self, audio : torch.Tensor, padding_mask : torch.tensor):

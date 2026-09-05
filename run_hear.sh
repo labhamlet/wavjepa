@@ -6,7 +6,7 @@
 #SBATCH --exclude=gcn118
 #SBATCH --time=00:10:00
 #SBATCH --output=hear/slurm_output_%A_%a.out
-#SBATCH --array=[5,8,10]
+#SBATCH --array=[0]
 
 cd ~/phd/wavjepa
 module load 2023
@@ -16,44 +16,14 @@ cd hear-eval-kit
 
 grids=(
 default
-fast
-default
-default
-default
-default
-default
-default
-default
-default
-default
 )
 
 task_dirs=(
 /projects/0/prjs1338/tasks
-/projects/0/prjs1338/tasks
-/projects/0/prjs1261/tasks
-/projects/0/prjs1338/tasks
-/projects/0/prjs1338/tasks
-/projects/0/prjs1338/tasks
-/projects/0/prjs1338/tasks
-/projects/0/prjs1338/tasks
-/projects/0/prjs1338/tasks
-/projects/0/prjs1338/tasks
-/projects/0/prjs1338/tasks
 )
 
 task_names=(
-beijing_opera-v1.0-hear2021-full
-dcase2016_task2-hear2021-full
-fsd50k-v1.0-full
 esc50-v2.0.0-full
-libricount-v1.0.0-hear2021-full
-speech_commands-v0.0.2-5h
-mridangam_stroke-v1.5-full
-mridangam_tonic-v1.5-full
-tfds_crema_d-1.0.0-full
-nsynth_pitch-v2.2.3-5h
-vox_lingua_top10-hear2021-full
 )
 
 task_name=${task_names[$SLURM_ARRAY_TASK_ID]}
@@ -67,9 +37,7 @@ model_name="hear_configs.WavJEPA_w2v2"
 sr=16000
 model_size=base
 weights=/gpfs/work4/0/prjs1338/saved_models_jepa_new_masking/Data=LibriSpeech/Extractor=wav2vec2/InSeconds=4.02/BatchSize=32/NrSamples=8/NrGPUs=2/LR=0.0004/TargetProb=0.15/TargetLen=5/ContextProb=0.65/ContextLen=10/MinContextBlock=5/ContextRatio=0.5/step=375000.ckpt
-# weights=/gpfs/work4/0/prjs1338/saved_models_jepa_libri/Data=LibriSpeech/Extractor=wavjepa/InSeconds=2.01/BatchSize=32/NrSamples=8/NrGPUs=2/LR=0.0004/Masking=speech-masker/TargetProb=0.1/TargetLen=10/ContextLen=0/TopK=8/step=370000.ckpt
-# weights=/gpfs/work4/0/prjs1338/saved_models_jepa_new_masking/Data=LibriSpeech/Extractor=wav2vec2/InSeconds=2.01/BatchSize=32/NrSamples=8/NrGPUs=2/LR=0.0004/TargetProb=0.2/TargetLen=10/ContextProb=0.65/ContextLen=10/MinContextBlock=5/ContextRatio=0.5/step=370000.ckpt
-# weights=/gpfs/work4/0/prjs1338/saved_models_jepa_new_masking/Data=LibriSpeech/Extractor=wav2vec2/InSeconds=4.02/BatchSize=32/NrSamples=8/NrGPUs=2/LR=0.0004/TargetProb=0.15/TargetLen=5/ContextProb=0.65/ContextLen=10/MinContextBlock=5/ContextRatio=0.5/step=300000.ckpt
+
 python3 -m heareval.embeddings.runner "$model_name" --tasks-dir "$task_dir" --task "$task_name" --embeddings-dir "$embeddings_dir" --model "$weights"
 python3 -m heareval.predictions.runner "$embeddings_dir/$model_name/$task_name" --grid $grid
 

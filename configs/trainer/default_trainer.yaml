@@ -7,3 +7,15 @@ compile_modules: True
 num_gpus : 2
 size : base
 average_top_k_layers : 8
+# Context packing in the student encoder/decoder (wavjepa/jepa.py, DESIGN.md C).
+# use_packing: False = the original full-sequence path with key-padding masks.
+use_packing: True
+pad_multiple: 32
+# Checkpoint cadence (ModelCheckpoint every_n_train_steps) and how often StepTimer prints step timings.
+checkpoint_every_n_steps: 25000
+print_step_time_every: 20
+# Micro-batches per optimizer step (effective clips per step = batch_size x accumulate_grad_batches).
+accumulate_grad_batches: 1
+# DataLoader defaults; a `data:` config may override them (data.* wins, see train.py).
+num_workers: 16
+prefetch_factor: 4
