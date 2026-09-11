@@ -84,7 +84,7 @@ def get_logger(task_name: str, log_path: Path) -> logging.Logger:
 @click.option(
     "--grid",
     default="default",
-    help='Grid to use: ["default", "fast", "faster"]',
+    help='Grid to use: ["default", "fast", "faster", "linear" (faster budget, linear probe only)]',
     type=str,
 )
 @click.option(

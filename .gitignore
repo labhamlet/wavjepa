@@ -175,3 +175,7 @@ outputs/
 # benchmark job logs
 benchmarks/*
 scripts/*
+*.md 
+third_party/*
+docs/*
+*.sbatch

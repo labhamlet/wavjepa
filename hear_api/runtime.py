@@ -45,6 +45,7 @@ class RuntimeJEPA(torch.nn.Module):
         extractor,
         model_size,
         sr,
+        layers=None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -75,7 +76,9 @@ class RuntimeJEPA(torch.nn.Module):
                 new_state_dict[key] = value
 
         self.model.load_state_dict(new_state_dict, strict=False)
-        self.embedding_size = self.model.encoder_embedding_dim
+        # ``layers`` (1-based encoder blocks) concatenates several blocks' outputs instead of the final one
+        self.layers = tuple(int(i) for i in layers) if layers else None
+        self.embedding_size = self.model.encoder_embedding_dim * (len(self.layers) if self.layers else 1)
         self.scene_embedding_size = self.embedding_size
         self.timestamp_embedding_size = self.embedding_size
         self.unit_frames = int(process_seconds * self.sample_rate)
@@ -134,7 +137,7 @@ class RuntimeJEPA(torch.nn.Module):
             mask = padding_mask[..., mask_idx : mask_idx + self.output_steps]
             with torch.no_grad():
                 # We do not include padding tokens in the mean and std calculation.
-                embedding = self.model.get_audio_representation(normalize(mt), mask)
+                embedding = self.model.get_audio_representation(normalize(mt), mask, layers=self.layers)
             mask_idx = mask_idx + self.output_steps
             embeddings.append(embedding)
 

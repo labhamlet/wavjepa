@@ -1,4 +1,4 @@
-import os
+"""HEAR config: the 50 Hz (wav2vec2-style front end) WavJEPA trained on 2.01 s crops (E2); identical to WavJEPA_w2v2 except process_seconds."""
 import torch
 
 from hear_api.runtime import RuntimeJEPA
@@ -20,15 +20,11 @@ def load_model(*args, **kwargs):
         )
 
     extractor = ConvFeatureExtractor(
-            conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)]"),
+            conv_layers_spec=eval("[(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)] + [(512,2,2)]"),
             in_channels=1,
     )    
 
-    layers = os.environ.get("WAVJEPA_LAYERS", "").strip()
-    layers = [int(i) for i in layers.replace(" ", "").split(",") if i] or None
-
     model = RuntimeJEPA(
-        layers=layers,
         in_channels=1,
         process_seconds=2.01,
         weights=weights,

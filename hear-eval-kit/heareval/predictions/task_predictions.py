@@ -114,6 +114,24 @@ FASTER_PARAM_GRID.update(
     }
 )
 
+# "linear": a LINEAR probe (no hidden layer: nn.Linear(embedding_dim, n_classes)) with the
+# default training budget (batch 1024, up to 500 epochs, patience 20), for the streaming sweeps
+# where dozens of (model, window, chunk) points are evaluated under one identical head:
+# 3 learning rates x 1 initialisation = 3 grid points.
+LINEAR_PARAM_GRID = copy.deepcopy(PARAM_GRID)
+LINEAR_PARAM_GRID.update(
+    {
+        "hidden_layers": [0],
+        "hidden_dim": [1024],  # unused with 0 hidden layers; one value avoids duplicate points
+        "lr": [3.2e-3, 1e-3, 3.2e-4],
+        "initialization": [torch.nn.init.xavier_uniform_],
+        "patience": [20],
+        "max_epochs": [500],
+        "batch_size": [1024],
+        "check_val_every_n_epoch": [3],
+    }
+)
+
 # These are good for dcase, change for other event-based secret tasks
 EVENT_POSTPROCESSING_GRID = {
     "median_filter_ms": [250],
@@ -1295,7 +1313,13 @@ def task_predictions(
     # results on 4 multi-worker jobs I ran, probably because our
     # dataloader doesn't do any augmentation or use randomness.
     if deterministic:
-        seed_everything(42, workers=False)
+        import os
+
+        # HEAR_SEED re-seeds the probe (grid search + final training) for repeated evaluations of the same
+        # embeddings; 42 is the kit's original value, so unset = unchanged behaviour.
+        seed = int(os.environ.get("HEAR_SEED", 42))
+        logger.info(f"seed_everything({seed})")
+        seed_everything(seed, workers=False)
 
     metadata = json.load(embedding_path.joinpath("task_metadata.json").open())
     label_vocab, nlabels = label_vocab_nlabels(embedding_path)
@@ -1322,9 +1346,15 @@ def task_predictions(
         final_grid = copy.copy(FAST_PARAM_GRID)
     elif grid == "faster":
         final_grid = copy.copy(FASTER_PARAM_GRID)
+    elif grid == "linear":
+        final_grid = copy.copy(LINEAR_PARAM_GRID)
+        # DCASE 2016 task 2 (timestamp task, ~100 frames/s for WavJEPA): the 500-epoch budget
+        # is prohibitive, so the linear probe always uses the "fast" epoch budget there.
+        if metadata["task_name"] == "dcase2016_task2":
+            final_grid["max_epochs"] = list(FAST_PARAM_GRID["max_epochs"])
     else:
         raise ValueError(
-            f"Unknown grid type: {grid}. Please select default, fast, or faster"
+            f"Unknown grid type: {grid}. Please select default, fast, faster, or linear"
         )
 
     # Update with task specific grid parameters
