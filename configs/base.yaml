@@ -8,3 +8,7 @@ defaults:
 model: JEPA
 save_dir: /projects/0/prjs1338
 seed: 42
+# Resume: ckpt_path='"<run dir>/last.ckpt"' (quote it: run-directory names contain '=' which hydra's
+# override grammar cannot parse unquoted). null = start from scratch.
+ckpt_path: null
+resume_last: false   # resume from the run's own last.ckpt if it exists (chained short jobs); exit if it is finished

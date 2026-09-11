@@ -1,4 +1,5 @@
 import gc
+import os
 
 import hydra
 import pytorch_lightning as pl
@@ -60,17 +61,18 @@ def _loader_setting(cfg, key: str):
     return cfg.data.get(key, cfg.trainer.get(key, default))
 
 
-def default_transformer_cfgs() -> dict:
+def default_transformer_cfgs(predictor_layers: int = 12) -> dict:
     """The transformer configs ``train.py`` builds the production model with.
 
     Returned as keyword arguments of :class:`JEPA` so that benchmarks / smoke tests
     can build a smaller model through the very same factory code path by passing
-    their own dict to :meth:`ComponentFactory.create_network`.
+    their own dict to :meth:`ComponentFactory.create_network`. ``predictor_layers``
+    (``trainer.predictor_layers``, default 12 = the paper) is the E6 predictor-depth knob.
     """
     return dict(
         transformer_encoder_cfg=TransformerEncoderCFG.create(),
         transformer_encoder_layers_cfg=TransformerLayerCFG.create(),
-        transformer_decoder_cfg=TransformerEncoderCFG.create(),
+        transformer_decoder_cfg=TransformerEncoderCFG.create(num_layers=int(predictor_layers)),
         transformer_decoder_layers_cfg=TransformerLayerCFG.create(d_model=384),
     )
 
@@ -153,7 +155,8 @@ class ComponentFactory:
         try:
             return network_class(
                 feature_extractor=extractor,
-                **(transformer_cfgs if transformer_cfgs is not None else default_transformer_cfgs()),
+                **(transformer_cfgs if transformer_cfgs is not None
+                   else default_transformer_cfgs(predictor_layers=int(cfg.trainer.get("predictor_layers", 12)))),
                 lr=cfg.optimizer.lr,
                 adam_betas=(cfg.optimizer.b1, cfg.optimizer.b2),
                 adam_weight_decay=cfg.optimizer.weight_decay,
@@ -162,10 +165,30 @@ class ComponentFactory:
                 nr_samples_per_audio=cfg.data.samples_per_audio,
                 compile_modules = cfg.trainer.compile_modules,
                 average_top_k_layers = cfg.trainer.average_top_k_layers,
+                # Schedule knobs (paper defaults); configs/trainer/ablation_100k.yaml compresses them.
+                ema_decay = float(cfg.trainer.get("ema_decay", 0.999)),
+                ema_end_decay = float(cfg.trainer.get("ema_end_decay", 0.99999)),
+                ema_anneal_end_step = int(cfg.trainer.get("ema_anneal_end_step", 100000)),
+                warmup_steps = int(cfg.trainer.get("warmup_steps", 100000)),
                 size = cfg.trainer.get("size", "base"),
                 use_packing = cfg.trainer.get("use_packing", PACKING_DEFAULTS["use_packing"]),
                 pad_multiple = cfg.trainer.get("pad_multiple", PACKING_DEFAULTS["pad_multiple"]),
                 masker = masker,
+                # E1 objective ablation: jepa (paper) | latent (arm B, data2vec-style) | bestrq (arm C)
+                objective = str(cfg.trainer.get("objective", "jepa")),
+                bestrq_codebook_size = int(cfg.trainer.get("bestrq_codebook_size", 8192)),
+                bestrq_code_dim = int(cfg.trainer.get("bestrq_code_dim", 16)),
+                bestrq_n_mels = int(cfg.trainer.get("bestrq_n_mels", 80)),
+                bestrq_stats_path = cfg.trainer.get("bestrq_stats_path", None),
+                # arm D (data2vec 2.0): masks per clip and the conv decoder
+                d2v2_masks_per_clip = int(cfg.trainer.get("d2v2_masks_per_clip", 4)),
+                d2v2_decoder_type = str(cfg.trainer.get("d2v2_decoder_type", "transformer")),
+                d2v2_decoder_dim = int(cfg.trainer.get("d2v2_decoder_dim", 384)),
+                d2v2_decoder_groups = int(cfg.trainer.get("d2v2_decoder_groups", 16)),
+                d2v2_decoder_kernel = int(cfg.trainer.get("d2v2_decoder_kernel", 7)),
+                d2v2_decoder_layers = int(cfg.trainer.get("d2v2_decoder_layers", 20)),
+                d2v2_input_dropout = float(cfg.trainer.get("d2v2_input_dropout", 0.1)),
+                d2v2_mask_noise_std = float(cfg.trainer.get("d2v2_mask_noise_std", 0.01)),
             )
         except Exception as e:
             raise RuntimeError(f"Failed to create network instance: {str(e)}")
@@ -303,6 +326,21 @@ def main(cfg):
     try:
         # Set random seed for reproducibility
         seed_everything(cfg.seed, workers=True)
+        # Chained short jobs (E1, 4 h walltime cap): `resume_last=true` resumes from the run's own
+        # last.ckpt when it exists, and exits at once if that checkpoint has already reached trainer.steps.
+        ckpt_path = cfg.get("ckpt_path", None)
+        if cfg.get("resume_last", False) and ckpt_path is None:
+            identity = get_identity_from_cfg(cfg)
+            last = f"{cfg.save_dir}/saved_models_jepa_new_masking/{identity.replace('_', '/')}/last.ckpt"
+            if os.path.exists(last):
+                step = int(torch.load(last, map_location="cpu", weights_only=False).get("global_step", 0))
+                if step >= int(cfg.trainer.steps):
+                    print(f"resume_last: {last} is at step {step} >= trainer.steps={cfg.trainer.steps}: nothing to do")
+                    return
+                print(f"resume_last: resuming from {last} (step {step})")
+                ckpt_path = last
+            else:
+                print(f"resume_last: no {last} yet, starting from scratch")
 
         # Setup training components
         logger = setup_logger(cfg)
@@ -318,7 +356,7 @@ def main(cfg):
 
         # Start training
         # `ckpt_path=<last.ckpt>` on the command line resumes an interrupted run (optimizer, EMA, step).
-        trainer.fit(model, data_module, ckpt_path=cfg.get("ckpt_path", None))
+        trainer.fit(model, data_module, ckpt_path=ckpt_path)
 
     except Exception as e:
         print(f"Training failed with error: {str(e)}")

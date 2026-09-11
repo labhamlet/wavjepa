@@ -14,6 +14,38 @@ pad_multiple: 32
 checkpoint_every_n_steps: 25000
 # Micro-batches per optimizer step (effective clips per step = batch_size x accumulate_grad_batches).
 accumulate_grad_batches: 1
+# Schedule (paper defaults): linear LR warmup then cosine to `steps`; teacher EMA decay annealed
+# ema_decay -> ema_end_decay over ema_anneal_end_step steps. Ablations use trainer=ablation_100k.
+warmup_steps: 100000
+ema_decay: 0.999
+ema_end_decay: 0.99999
+ema_anneal_end_step: 100000
 # DataLoader defaults; a `data:` config may override them (data.* wins, see train.py).
 num_workers: 16
 prefetch_factor: 4
+# Pre-training objective (E1 ablation): jepa (the paper) | latent (arm B, data2vec-style masked encoder,
+# WavJEPA's targets, linear head) | bestrq (arm C, masked encoder, cross-entropy on frozen random-projection
+# labels of the log-mel input; needs the AudioSet log-mel statistics below).
+objective: jepa
+bestrq_codebook_size: 8192
+bestrq_code_dim: 16
+bestrq_n_mels: 80
+bestrq_stats_path: configs/bestrq/audioset16k_mel80.pt
+# d2v2 (arm D, data2vec 2.0): context-only encoder + the 1-D conv decoder (their audio config: 384 wide, 16 groups,
+# kernel 7, input dropout 0.1, mask noise 0.01), masks_per_clip context masks per clip (data2vec 2.0 uses 8).
+# Depth: their 4 layers reach 25 tokens (250 ms), enough under their own masking (spans of 5, ~41 % masked, only
+# 0.11 % of masked positions out of reach) but not under the paper's inverse-block masking (~80 % masked in runs of
+# up to ~1 s), where 32 % of masked positions would see no context token at all and be predicted from noise.
+# 20 layers at the same kernel reach 121 tokens (1.21 s) and bring that back to 0.11 %, i.e. exactly the condition
+# data2vec 2.0 operates under, while staying light (1.7 M parameters against the 21 M of arm A's transformer predictor).
+# Decoder type: 'transformer' reuses arm A's predictor (12 layers, learned mask token, sin-cos positions, one joint
+# pass with full attention), so that A and arm D differ only in per-block vs joint decoding and in the loss support;
+# 'conv' is data2vec 2.0's own decoder (see the depth note below).
+d2v2_decoder_type: transformer
+d2v2_masks_per_clip: 4
+d2v2_decoder_dim: 384
+d2v2_decoder_groups: 16
+d2v2_decoder_kernel: 7
+d2v2_decoder_layers: 20
+d2v2_input_dropout: 0.1
+d2v2_mask_noise_std: 0.01

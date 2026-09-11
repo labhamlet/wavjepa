@@ -73,9 +73,179 @@ def pack_tokens(
     return x_packed, idx, pad
 
 
+def conv_geometry(module: nn.Module) -> tuple[int, int]:
+    """``(receptive_field, hop)`` in input samples of a stack of ``nn.Conv1d`` layers applied in registration
+    order (no padding): ``rf = 1 + sum_i (k_i - 1) * prod_{j < i} s_j``, ``hop = prod_i s_i``."""
+    rf, hop = 1, 1
+    for m in module.modules():
+        if isinstance(m, nn.Conv1d):
+            k, s = int(m.kernel_size[0]), int(m.stride[0])
+            rf += (k - 1) * hop
+            hop *= s
+    return rf, hop
+
+
+class RandomProjectionQuantizer(nn.Module):
+    """
+    BEST-RQ targets (Chiu et al., 2022, "Self-supervised learning with random-projection quantizer for
+    speech recognition"): log-mel frames, normalised per mel bin, multiplied by a FROZEN random projection
+    and assigned to the nearest entry of a FROZEN random codebook. The labels are therefore a fixed random
+    hash of the local spectrogram content; nothing here is trained.
+
+    * Mel: ``n_mels`` bins, 25 ms window / 10 ms hop, ``center=True`` (frame ``k`` centred at sample ``160 k``),
+      ``log(x + 1e-6)``.
+    * Normalisation: per-bin mean / std of the TRAINING SET, computed offline over the full unbalanced
+      AudioSet train split on the same standardised crops the encoder sees
+      (``benchmarks/bestrq_mel_stats.py`` -> ``configs/bestrq/*.pt``) and passed in as ``mel_mean`` /
+      ``mel_std`` (BEST-RQ normalises with global training-set statistics).
+    * One mel frame per encoder token (the 100 Hz WavJEPA front end: 10 ms tokens, 10 ms frames; BEST-RQ
+      itself stacks 4 x 10 ms frames for its 40 ms Conformer rate, which ``frames_per_token`` would allow but is
+      not used here). Token ``j`` gets frame ``j + frame_offset``, the frame centred nearest to the token's
+      receptive field: token ``j`` covers samples ``160 j .. 160 j + 240`` (centre ``160 j + 120``), frame ``k``
+      is centred at ``160 k``, hence ``frame_offset = 1``: frames 1..200 of the 201 frames of a 2.01 s crop.
+    * Projection: ``(code_dim, r * n_mels)`` Xavier-uniform; codebook: ``(codebook_size, code_dim)`` standard
+      normal, L2-normalised; the projected vector is L2-normalised and matched by cosine similarity
+      (= nearest neighbour in L2 on the unit sphere), as in the paper.
+    """
+
+    def __init__(self, mel_mean: torch.Tensor, mel_std: torch.Tensor, sr: int = 16000, n_mels: int = 80,
+                 n_fft: int = 400, hop: int = 160, frames_per_token: int = 1, frame_offset: int = 1,
+                 codebook_size: int = 8192, code_dim: int = 16, seed: int = 0) -> None:
+        super().__init__()
+        self.n_mels, self.hop, self.frames_per_token = int(n_mels), int(hop), int(frames_per_token)
+        self.frame_offset = int(frame_offset)
+        self.codebook_size, self.code_dim = int(codebook_size), int(code_dim)
+        self.mel = torchaudio.transforms.MelSpectrogram(
+            sample_rate=sr, n_fft=n_fft, win_length=n_fft, hop_length=hop, n_mels=n_mels, center=True, power=2.0,
+        )
+        mel_mean = torch.as_tensor(mel_mean, dtype=torch.float32).reshape(-1)
+        mel_std = torch.as_tensor(mel_std, dtype=torch.float32).reshape(-1)
+        if mel_mean.numel() != self.n_mels or mel_std.numel() != self.n_mels:
+            raise ValueError(f"mel_mean / mel_std must have {self.n_mels} entries, got {mel_mean.numel()} / {mel_std.numel()}")
+        self.register_buffer("mel_mean", mel_mean)
+        self.register_buffer("mel_std", mel_std.clamp(min=1e-5))
+        g = torch.Generator().manual_seed(int(seed))
+        fan_in, fan_out = self.frames_per_token * self.n_mels, self.code_dim
+        bound = math.sqrt(6.0 / (fan_in + fan_out))  # xavier uniform
+        proj = torch.empty(self.code_dim, fan_in).uniform_(-bound, bound, generator=g)
+        codebook = F.normalize(torch.randn(self.codebook_size, self.code_dim, generator=g), dim=-1)
+        self.register_buffer("proj", proj)
+        self.register_buffer("codebook", codebook)
+
+    @torch.no_grad()
+    def log_mel(self, wave: torch.Tensor) -> torch.Tensor:
+        """``(B, T)`` float -> ``(B, F, n_mels)`` log-mel, ``F = 1 + T // hop``."""
+        with torch.autocast(device_type=wave.device.type, enabled=False):
+            x = self.mel(wave.float())  # (B, n_mels, F)
+        return torch.log(x + 1e-6).transpose(1, 2)
+
+    @staticmethod
+    def frame_offset_for(receptive_field: int, hop: int, frames_per_token: int, mel_hop: int = 160) -> int:
+        """First mel frame of token 0 such that the ``frames_per_token`` stacked frames (centres ``mel_hop * k``) are
+        centred as close as possible to the token's centre ``receptive_field / 2`` (the extractor's first token
+        starts at sample 0 and the frames are ``center=True``)."""
+        centre_frames = (receptive_field / 2.0) / mel_hop  # token centre in frame units
+        return max(0, int(round(centre_frames - (frames_per_token - 1) / 2.0)))
+
+    def token_frames(self, x: torch.Tensor, n_tokens: int) -> torch.Tensor:
+        """``(B, F, n_mels)`` frames -> ``(B, n_tokens, r * n_mels)``: frames ``[r j + o, r j + o + r)`` per token
+        (zero = mean frames appended if the crop's last token reaches past the last frame)."""
+        r, o = self.frames_per_token, self.frame_offset
+        need = o + n_tokens * r
+        if x.shape[1] < need:
+            x = F.pad(x, (0, 0, 0, need - x.shape[1]))
+        return x[:, o:need].reshape(x.shape[0], n_tokens, r * self.n_mels)
+
+    @torch.no_grad()
+    def forward(self, wave: torch.Tensor, n_tokens: int) -> torch.Tensor:
+        """``(B, T)`` waveform (the standardised crop the encoder sees) -> ``(B, n_tokens)`` int64 labels."""
+        x = (self.log_mel(wave) - self.mel_mean) / self.mel_std  # (B, F, n_mels)
+        x = self.token_frames(x, n_tokens)
+        y = F.normalize(x @ self.proj.t(), dim=-1)  # (B, n_tokens, code_dim)
+        return (y @ self.codebook.t()).argmax(dim=-1)
+
+    @staticmethod
+    def perplexity(labels: torch.Tensor, codebook_size: int) -> torch.Tensor:
+        """``exp(H)`` of the label histogram of a batch (codebook usage; max = codebook_size)."""
+        counts = torch.bincount(labels.reshape(-1), minlength=codebook_size).float()
+        p = counts / counts.sum().clamp(min=1)
+        return torch.exp(-(p * torch.log(p.clamp(min=1e-12))).sum())
+
+
+class D2v2ConvDecoder(nn.Module):
+    """
+    data2vec 2.0's audio decoder (``examples/data2vec/models/modalities/modules.py``, ``Decoder1d`` with the
+    ``base_audio_only_task`` config: dim 384, 16 groups, kernel 7, input dropout 0.1, residual; the depth is raised
+    from their 4 layers to 20 so that the receptive field reaches context under the paper's much wider masking, see
+    ``configs/trainer/default_trainer.yaml``): a stack of
+    grouped 1-D convolutions, each followed by a channel LayerNorm without affine parameters and GELU, residual
+    connections from the second block on (the first block changes the width), and a final linear projection back
+    to the encoder width. ``forward(x)``: ``(B, S, input_dim)`` -> ``(B, S, input_dim)``.
+    """
+
+    def __init__(self, input_dim: int = 768, dim: int = 384, groups: int = 16, kernel: int = 7, layers: int = 20,
+                 residual: bool = True) -> None:
+        super().__init__()
+        self.residual = residual
+
+        def block(in_dim: int) -> nn.Module:
+            return nn.Sequential(
+                nn.Conv1d(in_dim, dim, kernel_size=kernel, padding=kernel // 2, groups=groups),
+                _ChannelLayerNorm(dim),
+                nn.GELU(),
+            )
+
+        self.blocks = nn.ModuleList([block(input_dim if i == 0 else dim) for i in range(layers)])
+        self.proj = nn.Linear(dim, input_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.transpose(1, 2)  # (B, C, S)
+        residual = x
+        for layer in self.blocks:
+            x = layer(x)
+            if self.residual and residual.shape[1] == x.shape[1]:  # fairseq add_residual: only when widths match
+                x = x + residual
+            residual = x
+        return self.proj(x.transpose(1, 2))
+
+
+class _ChannelLayerNorm(nn.Module):
+    """LayerNorm over the channel dim of a ``(B, C, S)`` tensor, no affine parameters (fairseq's TransposeLast-LayerNorm-TransposeLast)."""
+
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.layer_norm(x.transpose(1, 2), (self.dim,)).transpose(1, 2)
+
+
 class JEPA(pl.LightningModule):
     """
     Joint-Embedding Predictive Architecture (JEPA).
+
+    ``objective`` selects the pre-training objective (the E1 ablation of the revision):
+
+    * ``"jepa"`` (default): the paper's model -- context encoder on the context tokens, a predictor
+      (decoder) with mask tokens run once per target block, regression of the EMA teacher's top-K targets.
+    * ``"latent"`` (arm B, data2vec-style): the encoder sees the FULL sequence with the context tokens in
+      place and a mask token at every non-context position, and regresses WavJEPA's targets (the same EMA
+      teacher and top-K construction as ``jepa``) at all masked positions through a linear head (data2vec's
+      ``final_proj``). No predictor.
+    * ``"bestrq"`` (arm C, BEST-RQ-style): same masked-encoder input, but the masked positions are
+      classified (cross-entropy) into the labels of a frozen random-projection quantiser of the log-mel
+      input (:class:`RandomProjectionQuantizer`). No teacher, no EMA.
+    * ``"d2v2"`` (arm D, data2vec 2.0): the encoder sees the context tokens only (as ``jepa``); a decoder gets
+      the encoder outputs put back in place, with the masked positions filled in, and regresses WavJEPA's
+      targets at all masked positions in ONE pass. ``d2v2_decoder_type`` selects the decoder: ``conv`` is
+      data2vec 2.0's own (:class:`D2v2ConvDecoder`, masked slots filled with Gaussian noise), ``transformer``
+      reuses arm A's predictor with its learned mask token and sin-cos positions, so that A and this arm differ
+      only in per-block versus joint decoding. ``d2v2_masks_per_clip`` context masks are drawn per clip
+      (data2vec 2.0's ``clone_batch``): the front end and the teacher run once per clip, the student on the
+      clip repeated once per mask.
+
+    All objectives use the same masker, extractor, encoder, data and schedule; ``loss`` is the mean over the
+    masked positions (B / C: every non-context token; A: the sampled target blocks).
 
     This implementation is inspired by:
         * I-JEPA http://arxiv.org/abs/2301.08243
@@ -149,6 +319,7 @@ class JEPA(pl.LightningModule):
         ema_decay: float = 0.999,
         ema_end_decay: float = 0.99999,
         ema_anneal_end_step: int = 100000,
+        warmup_steps: int = 100000,
         average_top_k_layers: int = 12,
         resample_sr : int = 16000,
         process_audio_seconds: float = 2.00,
@@ -159,9 +330,27 @@ class JEPA(pl.LightningModule):
         use_packing: bool = True,
         pad_multiple: int = 32,
         masker: nn.Module | None = None,
+        objective: str = "jepa",
+        bestrq_codebook_size: int = 8192,
+        bestrq_code_dim: int = 16,
+        bestrq_n_mels: int = 80,
+        bestrq_stats_path: str | None = None,
+        bestrq_mel_stats: tuple[torch.Tensor, torch.Tensor] | None = None,
+        d2v2_masks_per_clip: int = 4,
+        d2v2_decoder_type: str = "transformer",
+        d2v2_decoder_dim: int = 384,
+        d2v2_decoder_groups: int = 16,
+        d2v2_decoder_kernel: int = 7,
+        d2v2_decoder_layers: int = 20,
+        d2v2_input_dropout: float = 0.1,
+        d2v2_mask_noise_std: float = 0.01,
         **kwargs : dict[str, Any],
     ):
         super().__init__(**kwargs)
+        if objective not in ("jepa", "latent", "bestrq", "d2v2"):
+            raise ValueError(f"objective must be 'jepa', 'latent', 'bestrq' or 'd2v2', got {objective!r}")
+        self.objective = objective
+        self.masks_per_clip = int(d2v2_masks_per_clip) if objective == "d2v2" else 1
         self.sr = resample_sr
         self.nr_samples_per_audio = nr_samples_per_audio
         self.ema_end_step = ema_anneal_end_step
@@ -172,7 +361,7 @@ class JEPA(pl.LightningModule):
         self.use_packing = use_packing
         self.pad_multiple = int(pad_multiple)
         self.save_hyperparameters(
-            ignore=["feature_encoder", "feature_extractor", "loss_fn", "masker"]
+            ignore=["feature_encoder", "feature_extractor", "loss_fn", "masker", "bestrq_mel_stats"]
         )
         self.extract_audio = feature_extractor
         self.feature_norms : nn.Module = nn.LayerNorm(self.extract_audio.embedding_dim)
@@ -219,6 +408,48 @@ class JEPA(pl.LightningModule):
         self.pos_encoding_encoder = self._get_pos_embed_params(self.encoder_embedding_dim)
         self.pos_encoding_decoder = self._get_pos_embed_params(self.decoder_embedding_dim)
 
+        # Arms B / C (see the class docstring): the encoder itself fills the masked positions, so it needs
+        # an encoder-width mask token and a head; the predictor above is built but unused (kept so that the
+        # state_dict of the ``jepa`` objective is unchanged and the module tree is the same for every arm).
+        if self.objective == "d2v2":
+            if d2v2_decoder_type not in ("conv", "transformer"):
+                raise ValueError(f"d2v2_decoder_type must be 'conv' or 'transformer', got {d2v2_decoder_type!r}")
+            self.d2v2_decoder_type = d2v2_decoder_type
+            self.d2v2_input_dropout = float(d2v2_input_dropout)
+            self.d2v2_mask_noise_std = float(d2v2_mask_noise_std)
+            if d2v2_decoder_type == "conv":
+                self.d2v2_decoder = D2v2ConvDecoder(self.encoder_embedding_dim, dim=d2v2_decoder_dim, groups=d2v2_decoder_groups,
+                                                    kernel=d2v2_decoder_kernel, layers=d2v2_decoder_layers)
+            # ``transformer``: arm A's predictor is reused as the decoder (``self.decoder`` + ``mask_token`` +
+            # ``pos_encoding_decoder`` + the two width mappers), so nothing extra is built.
+        if self.objective in ("latent", "bestrq"):
+            self.enc_mask_token = nn.Parameter(torch.zeros(1, 1, self.encoder_embedding_dim))
+            torch.nn.init.normal_(self.enc_mask_token, std=0.02)
+            if self.objective == "latent":
+                self.latent_head = nn.Linear(self.encoder_embedding_dim, self.encoder_embedding_dim)
+            else:
+                receptive_field, hop = conv_geometry(feature_extractor)  # 240 / 160 samples for the 100 Hz front end
+                if hop != 160:
+                    raise ValueError(f"objective='bestrq' is defined for the 100 Hz WavJEPA front end (one 10 ms mel frame per "
+                                     f"10 ms token); this extractor has a hop of {hop} samples")
+                frames_per_token = 1
+                frame_offset = RandomProjectionQuantizer.frame_offset_for(receptive_field, hop, frames_per_token)
+                if bestrq_mel_stats is not None:
+                    mel_mean, mel_std = bestrq_mel_stats
+                elif bestrq_stats_path:
+                    stats = torch.load(bestrq_stats_path, map_location="cpu", weights_only=False)
+                    mel_mean, mel_std = stats["mean"], stats["std"]
+                    if int(stats.get("n_mels", bestrq_n_mels)) != int(bestrq_n_mels):
+                        raise ValueError(f"{bestrq_stats_path} holds {stats.get('n_mels')} mel bins, model wants {bestrq_n_mels}")
+                else:
+                    raise ValueError("objective='bestrq' needs the training-set log-mel statistics: pass "
+                                     "bestrq_stats_path (benchmarks/bestrq_mel_stats.py output) or bestrq_mel_stats=(mean, std)")
+                self.quantizer = RandomProjectionQuantizer(
+                    mel_mean, mel_std, sr=resample_sr, n_mels=bestrq_n_mels, hop=160, frames_per_token=frames_per_token,
+                    frame_offset=frame_offset, codebook_size=bestrq_codebook_size, code_dim=bestrq_code_dim,
+                )
+                self.bestrq_head = nn.Linear(self.encoder_embedding_dim, bestrq_codebook_size)
+
         self.apply(self._init_weights)
         self._init_teacher()
         if compile_modules:
@@ -260,8 +491,12 @@ class JEPA(pl.LightningModule):
         return pos_embed
 
     def _init_teacher(self):
+        if self.objective == "bestrq":
+            self.teacher_encoder = None  # BEST-RQ has no teacher and no EMA: the targets are fixed labels
+            return
         self.teacher_encoder = copy.deepcopy(self.encoder)
         self.teacher_encoder.requires_grad_(False)
+
 
     def _get_ema_decay(self):
         if self.global_step >= self.ema_end_step:
@@ -297,7 +532,15 @@ class JEPA(pl.LightningModule):
                 self.encoder_forward = torch.compile(self.encoder_forward, fullgraph=True)
                 self.decoder_forward = torch.compile(self.decoder_forward, fullgraph=True)
                 self.masked_loss = torch.compile(self.masked_loss)
-            self._forward_teacher = torch.compile(self._forward_teacher, fullgraph=True)
+            if self.teacher_encoder is not None:
+                self._forward_teacher = torch.compile(self._forward_teacher, fullgraph=True)
+            if self.objective in ("latent", "bestrq"):  # full-sequence masked encoder: one fixed shape
+                self._masked_encoder_core = torch.compile(self._masked_encoder_core, fullgraph=True)
+            if self.objective == "d2v2":  # decoder on (B * masks, S, E): one fixed shape
+                if self.d2v2_decoder_type == "conv":
+                    self._d2v2_decoder_core = torch.compile(self._d2v2_decoder_core, fullgraph=True)
+                else:
+                    self._d2v2_transformer_core = torch.compile(self._d2v2_transformer_core, fullgraph=True)
             self.extract_audio = torch.compile(self.extract_audio)
 
         except Exception as e:
@@ -313,8 +556,11 @@ class JEPA(pl.LightningModule):
             eps=self.hparams.adam_eps,
             weight_decay=self.hparams.adam_weight_decay,
         )
+        # Warmup length is a hyper-parameter (default 100k = the paper's schedule) so that reduced-budget
+        # ablations can compress the whole schedule (warmup, EMA anneal, cosine) proportionally.
         cosine_annealing = transformers.get_cosine_schedule_with_warmup(optimizer,
-                                 num_warmup_steps=100000, num_training_steps=self.trainer.max_steps)
+                                 num_warmup_steps=int(self.hparams.get("warmup_steps", 100000)),
+                                 num_training_steps=self.trainer.max_steps)
 
         return {"optimizer": optimizer,
                 'lr_scheduler' : {"scheduler": cosine_annealing, "interval": "step"}}
@@ -493,16 +739,21 @@ class JEPA(pl.LightningModule):
         flattened = self.collate_fn(crops.to(torch.bfloat16))                  # (B*n, C, T)
         total = flattened.shape[0]
 
+        M = self.masks_per_clip  # d2v2: M independent context masks per crop (rows m*M .. m*M+M-1 belong to crop m)
         ctx_masks, target_indices, ctx_and_target_masks = self.masker.sample(
-            total, self.total_patches, in_channels=self._masker_in_channels,
+            total * M, self.total_patches, in_channels=self._masker_in_channels,
             device=device, generator=gen,
         )
         perm = torch.randperm(total, device=device, generator=gen)
+        if M > 1:  # permute crops and their M masks together
+            perm_m = (perm[:, None] * M + torch.arange(M, device=device)[None, :]).reshape(-1)
+        else:
+            perm_m = perm
         return (
             flattened[perm],
-            ctx_masks[perm].to(torch.bool),
-            target_indices[perm].to(torch.bool),
-            ctx_and_target_masks[perm].to(torch.bool),
+            ctx_masks[perm_m].to(torch.bool),
+            target_indices[perm_m].to(torch.bool),
+            ctx_and_target_masks[perm_m].to(torch.bool),
         )
 
     def on_after_batch_transfer(self, batch, dataloader_idx):
@@ -562,10 +813,11 @@ class JEPA(pl.LightningModule):
         out = self(audio_input,ctx_masks, target_indices, ctx_and_target_masks)
 
         # Enhanced logging
-        log_data = {
-            "train/loss": out['loss'],
-            "ema" : self._get_ema_decay(),
-        }
+        log_data = {"train/loss": out['loss']}
+        if self.teacher_encoder is not None:
+            log_data["ema"] = self._get_ema_decay()
+        if "code_perplexity" in out:  # bestrq: codebook usage of the batch
+            log_data["train/code_perplexity"] = out["code_perplexity"]
 
         self.log_dict(log_data, prog_bar=True, sync_dist=True)
 
@@ -576,7 +828,7 @@ class JEPA(pl.LightningModule):
         accumulate = 1
         if self._trainer is not None:
             accumulate = int(getattr(self.trainer, "accumulate_grad_batches", 1) or 1)
-        if (batch_idx + 1) % accumulate == 0:
+        if self.teacher_encoder is not None and (batch_idx + 1) % accumulate == 0:
             with torch.amp.autocast('cuda', enabled=False):  # Force FP32 computation for stability
                 self._step_teacher()
 
@@ -678,6 +930,11 @@ class JEPA(pl.LightningModule):
 
         local_features = local_features + self.pos_encoding_encoder
 
+        if self.objective in ("latent", "bestrq"):
+            return self._forward_masked_encoder(audio, local_features, ctx_masks, target_indices)
+        if self.objective == "d2v2":
+            return self._forward_d2v2(local_features, ctx_masks)
+
         if self.use_packing:
             # Student encoder on the context tokens only -> (n_ctx_total, E_enc),
             # row-major (b, position) order like ``contextual_features[~ctx_masks]``.
@@ -732,6 +989,118 @@ class JEPA(pl.LightningModule):
             targets=targets,
         )
 
+
+    # ------------------------------------------------------------------ #
+    # Arms B / C: masked-encoder objectives (no predictor)
+    # ------------------------------------------------------------------ #
+    def _masked_encoder_core(self, x: torch.Tensor) -> torch.Tensor:
+        """Student encoder on the full (mask-token filled) sequence; compiled with a fixed shape."""
+        return self.encoder_forward(x)
+
+    def _forward_masked_encoder(self, audio: torch.Tensor, local_features: torch.Tensor,
+                                ctx_masks: torch.Tensor, target_indices: torch.Tensor) -> ForwardReturn:
+        """
+        The masking of the paper (the masker's context set is the context; every other position is masked),
+        then: context tokens stay, every masked position becomes the mask token (+ its positional encoding),
+        the full sequence goes through the encoder, and the encoder's output at the masked positions is
+        trained to predict
+
+        * ``latent`` (data2vec-style): WavJEPA's own targets -- the EMA teacher's top-K layer average of the
+          unmasked sequence, exactly as arm A (:meth:`_forward_teacher`) -- through the linear ``latent_head``
+          (data2vec's ``final_proj``), with the model's ``loss_fn`` (MSE, as data2vec audio's ``loss_beta = 0``;
+          averaged per element here, data2vec sums over the feature dimension and scales by ``1/sqrt(D)``).
+          data2vec's own target construction (FFN outputs before the residual, per-channel instance norm) is
+          deliberately NOT used, so that B and A regress the identical target;
+        * ``bestrq``: the frozen random-projection labels of the log-mel input through ``bestrq_head``,
+          with cross-entropy.
+
+        ``loss`` averages over all masked positions; ``code_perplexity`` (bestrq) is the codebook usage of
+        the batch.
+        """
+        B, S, _ = local_features.shape
+        masked = ctx_masks  # (B, S) True = not a context token
+        fill = (self.enc_mask_token + self.pos_encoding_encoder).type_as(local_features).expand(B, -1, -1)
+        x = torch.where(masked.unsqueeze(-1), fill, local_features)
+        h = self._masked_encoder_core(x)  # (B, S, E)
+
+        extras: dict[str, torch.Tensor] = {}
+        if self.objective == "latent":
+            preds = self.latent_head(h)
+            targets = self._forward_teacher(local_features.detach())  # exactly WavJEPA's targets (arm A)
+            loss_map = self.loss_fn(preds, targets).mean(dim=-1)  # (B, S)
+        else:
+            wave = audio[:, 0, :] if audio.ndim == 3 else audio
+            labels = self.quantizer(wave, S)  # (B, S) int64, no grad
+            logits = self.bestrq_head(h)  # (B, S, V)
+            loss_map = F.cross_entropy(logits.float().transpose(1, 2), labels, reduction="none")  # (B, S)
+            preds, targets = logits, labels
+            extras["code_perplexity"] = self.quantizer.perplexity(labels[masked], self.quantizer.codebook_size)
+
+        m = masked.to(loss_map.dtype)
+        loss = (loss_map * m).sum() / (m.sum() + 1e-8)
+
+        out = ForwardReturn(local_features=local_features, contextual_features=h, loss=loss, preds=preds, targets=targets)
+        out.update(extras)
+        return out
+
+    # ------------------------------------------------------------------ #
+    # Arm D: data2vec 2.0 (context-only encoder, conv decoder, one pass, M masks per clip)
+    # ------------------------------------------------------------------ #
+    def _d2v2_decoder_core(self, x: torch.Tensor) -> torch.Tensor:
+        return self.d2v2_decoder(x)
+
+    def _d2v2_transformer_core(self, x: torch.Tensor) -> torch.Tensor:
+        """Arm A's transformer predictor over the full sequence, attending to context and all mask tokens alike."""
+        return self.decoder(x)
+
+    def _forward_d2v2(self, local_features: torch.Tensor, ctx_masks: torch.Tensor) -> ForwardReturn:
+        """
+        data2vec 2.0 with the paper's masks and WavJEPA's targets. ``local_features``: ``(B, S, E)`` tokens with
+        positional encodings (one row per clip); ``ctx_masks``: ``(B * M, S)`` bool, True = NOT context, M
+        independent masks per clip in consecutive rows (``_crop_and_mask``).
+
+        * teacher: once per clip on the unmasked sequence -> WavJEPA's targets (:meth:`_forward_teacher`);
+        * student encoder: the context tokens only, packed (exactly arm A's encoder path), on the clip repeated
+          once per mask;
+        * decoder, ``d2v2_decoder_type``:
+
+          - ``conv``: data2vec 2.0's own decoder. Input as their ``decoder_input``: the encoder outputs put back
+            at their positions after input dropout, Gaussian noise N(0, mask_noise_std) at every masked position,
+            no positional encoding added there (``add_positions_masked`` is off in the audio config);
+            :class:`D2v2ConvDecoder`, one pass over the full sequence.
+          - ``transformer`` (default): ARM A's PREDICTOR, unchanged and matched in capacity, used as the decoder:
+            the encoder outputs mapped to the predictor width at their positions, arm A's learned ``mask_token``
+            at every masked position, arm A's fixed sin-cos ``pos_encoding_decoder`` added to all positions, one
+            pass with full self-attention over context and all mask tokens, mapped back to the encoder width.
+            No input dropout and no noise, i.e. exactly arm A's decoder input. A and this variant then differ
+            only in HOW the masked positions are decoded (four block-restricted passes vs one joint pass) and in
+            the loss support (the four sampled blocks vs every masked position).
+
+        * loss: ``loss_fn`` (MSE) at all masked positions, mean over them (data2vec 2.0: ``loss_beta = 0``).
+        """
+        B, S, E = local_features.shape
+        M = ctx_masks.shape[0] // B
+        if M * B != ctx_masks.shape[0]:
+            raise ValueError(f"d2v2: {ctx_masks.shape[0]} mask rows are not a multiple of the {B} clips")
+        targets = self._forward_teacher(local_features.detach())  # (B, S, E), once per clip
+        x = local_features.repeat_interleave(M, dim=0) if M > 1 else local_features  # (B*M, S, E)
+        ctx_out = self.encoder_forward_packed(x, ctx_masks)  # (n_ctx_total, E), row-major (row, position)
+        if self.d2v2_decoder_type == "conv":
+            ctx_in = F.dropout(ctx_out, self.d2v2_input_dropout, training=self.training)
+            dec_in = torch.empty(B * M, S, E, device=x.device, dtype=ctx_in.dtype).normal_(0.0, self.d2v2_mask_noise_std)
+            dec_in[~ctx_masks] = ctx_in
+            preds = self._d2v2_decoder_core(dec_in)  # (B*M, S, E)
+        else:  # arm A's predictor: learned mask token + sin-cos positions, one joint pass
+            ctx_in = self.encoder_to_decoder_mapper(ctx_out)  # (n_ctx_total, E_dec)
+            dec_in = self.mask_token.repeat(B * M, S, 1).type_as(ctx_in)
+            dec_in[~ctx_masks] = ctx_in
+            dec_in = dec_in + self.pos_encoding_decoder
+            preds = self.decoder_to_encoder_mapper(self._d2v2_transformer_core(dec_in))  # (B*M, S, E)
+        targets_rep = targets.repeat_interleave(M, dim=0) if M > 1 else targets
+        loss_map = self.loss_fn(preds, targets_rep).mean(dim=-1)  # (B*M, S)
+        m = ctx_masks.to(loss_map.dtype)
+        loss = (loss_map * m).sum() / (m.sum() + 1e-8)
+        return ForwardReturn(local_features=local_features, contextual_features=ctx_out, loss=loss, preds=preds, targets=targets)
 
     def decoder_forward(self, contextual_features: torch.Tensor, ctx_mask: torch.BoolTensor, nr_targets : int, src_key_padding_mask : Optional[torch.BoolTensor] = None) -> torch.Tensor:
         B = ctx_mask.shape[0]
@@ -833,7 +1202,15 @@ class JEPA(pl.LightningModule):
         return preds, idx2, pad2
 
     @torch.inference_mode()
-    def get_audio_representation(self, audio : torch.Tensor, padding_mask : torch.tensor):
+    def get_audio_representation(self, audio : torch.Tensor, padding_mask : torch.tensor,
+                                 layers: Optional[List[int]] = None):
+        """Downstream features of ``audio``.
+
+        ``layers`` (1-based block indices, e.g. ``[1, 4, 8, 12]``) returns the CONCATENATION of those encoder
+        blocks' outputs, each parameter-free layer-normalised so the parts share a scale; this is the usual
+        layer-wise probing setup and is meant for objectives whose top layers specialise to the pretext task.
+        ``None`` (default) is unchanged: the encoder's final output, including its own final LayerNorm.
+        """
         # Get the audio representatin of waveform x.
         self.eval()
         local_features = self.extract_audio(audio)
@@ -841,6 +1218,17 @@ class JEPA(pl.LightningModule):
         if self.post_extraction_mapper:
             local_features = self.post_extraction_mapper(local_features)
         local_features = local_features + self.pos_encoding_encoder
-        # Encoder and decoder forward
-        contextual_features = self.encoder_forward(local_features, src_key_padding_mask = padding_mask)
-        return contextual_features
+        if layers is None:
+            # Encoder and decoder forward
+            contextual_features = self.encoder_forward(local_features, src_key_padding_mask = padding_mask)
+            return contextual_features
+        blocks = self.encoder.layers
+        want = sorted({int(i) for i in layers})
+        if want[0] < 1 or want[-1] > len(blocks):
+            raise ValueError(f"layers must be within 1..{len(blocks)}, got {sorted(layers)}")
+        x, outs = local_features, []
+        for i, blk in enumerate(blocks, start=1):
+            x = blk(x, src_key_padding_mask=padding_mask)
+            if i in want:
+                outs.append(F.layer_norm(x.float(), x.shape[-1:]).type_as(x))
+        return torch.cat(outs, dim=-1)

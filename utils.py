@@ -25,6 +25,32 @@ def get_identity_from_cfg(cfg):
     identity += "Packed={}".format(
         cfg.trainer.get("use_packing", True),
     )
+    # Revision ablations (E1): appended only when they differ from the paper setting, so the
+    # paper / revision run directories keep their names.
+    objective = cfg.trainer.get("objective", "jepa")
+    if objective != "jepa":
+        identity += "_Objective={}".format(objective)
+    if objective == "d2v2":
+        # the decoder decides what the arm tests (and, for the conv one, how far it can reach), so it is in the name
+        if str(cfg.trainer.get("d2v2_decoder_type", "transformer")) == "transformer":
+            identity += "_D2v2Dec=tf{}".format(cfg.trainer.get("transformer_decoder_layers", 12))
+        else:
+            identity += "_D2v2Dec={}x{}".format(
+                cfg.trainer.get("d2v2_decoder_layers", 20), cfg.trainer.get("d2v2_decoder_kernel", 7)
+            )
+    top_k = cfg.trainer.get("average_top_k_layers", 8)
+    if int(top_k) != 8:
+        identity += "_TopK={}".format(top_k)
+    # E6 ablations: predictor depth (trainer.predictor_layers) and number of target blocks (masker.target_masks_per_context)
+    pred_layers = cfg.trainer.get("predictor_layers", 12)
+    if int(pred_layers) != 12:
+        identity += "_PredDepth={}".format(pred_layers)
+    n_targets = cfg.masker.get("target_masks_per_context", 4)
+    if int(n_targets) != 4:
+        identity += "_NrTargets={}".format(n_targets)
+    steps = cfg.trainer.get("steps", 375000)
+    if int(steps) != 375000:
+        identity += "_Steps={}".format(steps)
     return identity
 
 

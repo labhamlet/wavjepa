@@ -1,0 +1,33 @@
+# Reduced-budget trainer for the revision ablations (E1 arms, E2, E6): 100k optimizer steps
+# (26.7 % of the 375k paper schedule) with the WHOLE schedule compressed by the same factor, so
+# every arm sees the same shape: warmup 100k/375k*100k = 26.7k steps, EMA anneal over 26.7k steps,
+# cosine decay reaching zero at 100k. Everything else identical to default_trainer.yaml.
+epochs: -1
+batch_size: 256
+accelerator: gpu
+steps: 100000
+precision: bf16-mixed
+compile_modules: True
+num_gpus : 1
+size : base
+average_top_k_layers : 8
+use_packing: True
+pad_multiple: 32
+checkpoint_every_n_steps: 10000
+accumulate_grad_batches: 1
+warmup_steps: 26667
+ema_decay: 0.999
+ema_end_decay: 0.99999
+ema_anneal_end_step: 26667
+num_workers: 16
+prefetch_factor: 4
+# E1 objective ablation (same masker / extractor / encoder / data / schedule for every arm):
+#   A  objective=jepa                      the paper's model
+#   B  objective=latent                    masked encoder (context tokens + mask tokens), EMA teacher top-K targets, no predictor
+#   C  objective=bestrq                    masked encoder, cross-entropy on frozen random-projection labels of the log-mel input
+objective: jepa
+bestrq_codebook_size: 8192
+bestrq_code_dim: 16
+bestrq_n_mels: 80
+# per-bin log-mel mean / std of the full unbalanced AudioSet train split (benchmarks/bestrq_mel_stats.py)
+bestrq_stats_path: configs/bestrq/audioset16k_mel80.pt
