@@ -26,9 +26,11 @@ def load_model(*args, **kwargs):
 
     layers = os.environ.get("WAVJEPA_LAYERS", "").strip()
     layers = [int(i) for i in layers.replace(" ", "").split(",") if i] or None
+    layer_pool = os.environ.get("WAVJEPA_LAYER_POOL", "concat").strip() or "concat"   # concat (default) | mean
 
     model = RuntimeJEPA(
         layers=layers,
+        layer_pool=layer_pool,
         in_channels=1,
         process_seconds=2.01,
         weights=weights,

@@ -1203,12 +1203,13 @@ class JEPA(pl.LightningModule):
 
     @torch.inference_mode()
     def get_audio_representation(self, audio : torch.Tensor, padding_mask : torch.tensor,
-                                 layers: Optional[List[int]] = None):
+                                 layers: Optional[List[int]] = None, layer_pool: str = "concat"):
         """Downstream features of ``audio``.
 
-        ``layers`` (1-based block indices, e.g. ``[1, 4, 8, 12]``) returns the CONCATENATION of those encoder
-        blocks' outputs, each parameter-free layer-normalised so the parts share a scale; this is the usual
-        layer-wise probing setup and is meant for objectives whose top layers specialise to the pretext task.
+        ``layers`` (1-based block indices, e.g. ``[1, 4, 8, 12]``) returns those encoder blocks' outputs, each
+        parameter-free layer-normalised so the parts share a scale, combined by ``layer_pool``: ``"concat"``
+        (len(layers) x d_model, the usual layer-wise probing setup) or ``"mean"`` (d_model, so the probe sees the
+        same width as a single-layer model). Meant for objectives whose top layers specialise to the pretext task.
         ``None`` (default) is unchanged: the encoder's final output, including its own final LayerNorm.
         """
         # Get the audio representatin of waveform x.
@@ -1231,4 +1232,8 @@ class JEPA(pl.LightningModule):
             x = blk(x, src_key_padding_mask=padding_mask)
             if i in want:
                 outs.append(F.layer_norm(x.float(), x.shape[-1:]).type_as(x))
+        if layer_pool == "mean":
+            return torch.stack(outs, dim=0).mean(dim=0)
+        if layer_pool != "concat":
+            raise ValueError(f"layer_pool must be 'concat' or 'mean', got {layer_pool!r}")
         return torch.cat(outs, dim=-1)

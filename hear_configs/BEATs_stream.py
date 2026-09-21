@@ -75,8 +75,10 @@ def build_streaming_model(
     batch_windows: int = 32,
     rtf_json: Optional[str] = None,
     map_location: Optional[torch.device] = None,
+    layers: Optional[list[int]] = None,
 ) -> StreamingWrapper:
-    """Checkpoint -> ``StreamingWrapper``; ``hop_s`` defaults to ``window_s``."""
+    """Checkpoint -> ``StreamingWrapper``; ``hop_s`` defaults to ``window_s``. ``layers`` = layer-wise probe (see
+    ``BEATsWindowModel``)."""
     hop_s = window_s if hop_s is None else hop_s
     # A window of 2800 + 2560 k samples (e.g. 158960 = 9.935 s = 62 patch columns) ends exactly on a patch
     # column, so every chunk - however short - emits the column ending at the chunk end ("dense framing",
@@ -93,7 +95,7 @@ def build_streaming_model(
             f"BEATs streaming needs W >= {MIN_WINDOW_S} s (one patch's 175 ms receptive field); "
             f"W = {window_s} s was requested"
         )
-    base = BEATsWindowModel(build_beats(model_path, map_location), band_pool=band_pool)
+    base = BEATsWindowModel(build_beats(model_path, map_location), band_pool=band_pool, layers=layers)
     assert base.token_hop_ms == TOKEN_HOP_MS and base.front_rf_ms == FRONT_RF_MS
     model = StreamingWrapper(
         base,
@@ -125,6 +127,8 @@ def load_model(*args, **kwargs) -> StreamingWrapper:
         window_s=window_s,
         hop_s=hop_s,
         band_pool=os.environ.get("BEATS_BAND_POOL", "mean"),
+        # WAVJEPA_LAYERS=1,2,...,12 -> layer-wise probe (same env var as the WavJEPA / HF wrappers)
+        layers=[int(i) for i in os.environ.get("WAVJEPA_LAYERS", "").replace(" ", "").split(",") if i] or None,
         emit_rule=os.environ.get("STREAM_EMIT", "rf_end"),
         batch_windows=int(os.environ.get("STREAM_BATCH_WINDOWS", "32")),
         rtf_json=os.environ.get("STREAM_RTF_JSON") or None,

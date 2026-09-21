@@ -317,6 +317,26 @@ def test_d2v2_transformer_decoder_reuses_arm_a_predictor():
     assert model.mask_token.grad is not None and model.mask_token.grad.abs().sum() > 0
 
 
+def test_d2v2_with_data2vec2_block_masking():
+    """The paper's masking (D2v2BlockMasker) drives the d2v2 objective through the model's own mask sampling:
+    M = 8 masks per clip, exactly half of every row masked, loss over the masked half, gradients flow."""
+    from wavjepa.masking import D2v2BlockMasker
+    model = _d2v2_model("transformer", M=8)
+    model.masker = D2v2BlockMasker(mask_prob=0.5, mask_length=10, mask_prob_adjust=0.05)
+    model._generator = None
+    audio_full = torch.randn(B, 1, model.target_length + 500)
+    a, ctx, tgt, ctx_tgt = model._crop_and_mask(audio_full)
+    assert ctx.shape == (B * 8, S) and tgt.shape == (B * 8, 1, S)
+    assert (ctx.sum(dim=1) == S // 2).all()
+    assert not torch.equal(ctx[0], ctx[1])                      # the 8 masks of a clip differ
+    out = model(a.float(), ctx, tgt, ctx_tgt)
+    assert torch.isfinite(out["loss"]) and out["loss"] > 0
+    assert out["preds"].shape == (B * 8, S, 64) and out["targets"].shape == (B, S, 64)
+    out["loss"].backward()
+    for mod in (model.decoder, model.encoder, model.extract_audio):
+        assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in mod.parameters())
+
+
 def test_d2v2_conv_decoder_variant_still_works():
     model = _d2v2_model("conv", M=2, d2v2_decoder_kernel=7, d2v2_decoder_layers=6)
     assert hasattr(model, "d2v2_decoder") and len(model.d2v2_decoder.blocks) == 6

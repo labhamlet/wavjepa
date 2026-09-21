@@ -157,12 +157,42 @@ class OneHotToCrossEntropyLoss(pl.LightningModule):
         return self.loss(y_hat, y)
 
 
+class LayerWeightedSum(torch.nn.Module):
+    """SUPERB-style learnable weighted sum over the L encoder blocks stored concatenated in the embedding
+    (..., L * d) -> (..., d). Softmax weights, initialised uniform, trained jointly with the head, so the
+    layer choice is learned per task instead of picked by hand. Enabled with HEAR_LAYER_SUM=<L>."""
+
+    def __init__(self, n_layers: int, nfeatures: int):
+        super().__init__()
+        assert nfeatures % n_layers == 0, f"embedding dim {nfeatures} is not {n_layers} stacked layers"
+        self.n_layers, self.d = n_layers, nfeatures // n_layers
+        self.logits = torch.nn.Parameter(torch.zeros(n_layers))
+
+    @property
+    def weights(self) -> torch.Tensor:
+        return torch.softmax(self.logits, dim=0)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.view(*x.shape[:-1], self.n_layers, self.d)
+        return (x * self.weights.view(*([1] * (x.dim() - 2)), self.n_layers, 1)).sum(dim=-2)
+
+
+def layer_sum_n() -> int:
+    """0 = off (the default protocol); otherwise the number of stacked layers in the embedding."""
+    import os
+    return int(os.environ.get("HEAR_LAYER_SUM", 0) or 0)
+
+
 class FullyConnectedPrediction(torch.nn.Module):
     def __init__(self, nfeatures: int, nlabels: int, prediction_type: str, conf: Dict):
         super().__init__()
 
         hidden_modules: List[torch.nn.Module] = []
         curdim = nfeatures
+        self.layer_sum: torch.nn.Module = torch.nn.Identity()
+        if layer_sum_n():
+            self.layer_sum = LayerWeightedSum(layer_sum_n(), nfeatures)
+            curdim = self.layer_sum.d
         # Honestly, we don't really know what activation preceded
         # us for the final embedding.
         last_activation = "linear"
@@ -202,6 +232,7 @@ class FullyConnectedPrediction(torch.nn.Module):
             raise ValueError(f"Unknown prediction_type {prediction_type}")
 
     def forward_logit(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.layer_sum(x)
         x = self.hidden(x)
         x = self.projection(x)
         return x
@@ -343,6 +374,15 @@ class AbstractPredictionModel(pl.LightningModule):
         return flat_outputs
 
     def configure_optimizers(self):
+        if layer_sum_n():
+            # SUPERB-style: the few layer-weight logits get a much higher lr than the head, otherwise the softmax
+            # never leaves uniform within the early-stopped run and the "learned" sum is just the mean of the blocks.
+            import os
+            mult = float(os.environ.get("HEAR_LAYER_SUM_LR_MULT", 100))
+            logits = [p for n, p in self.named_parameters() if n.endswith("layer_sum.logits")]
+            rest = [p for n, p in self.named_parameters() if not n.endswith("layer_sum.logits")]
+            return self.hparams.optim([{"params": rest}, {"params": logits, "lr": self.hparams.lr * mult}],
+                                      lr=self.hparams.lr)
         optimizer = self.hparams.optim(self.parameters(), lr=self.hparams.lr)
         return optimizer
 
@@ -1461,6 +1501,16 @@ def task_predictions(
 
     # Make sure we have a test score for each fold
     assert len(test_results) == len(data_splits)
+
+    # Learned layer weights (HEAR_LAYER_SUM): one softmax vector per fold, read back from the best checkpoint.
+    # Kept in a separate file so the score aggregation below stays untouched.
+    if layer_sum_n():
+        layer_weights = {}
+        for i, split in enumerate(data_splits):
+            sd = torch.load(split_grid_points[i].model_path, map_location="cpu")["state_dict"]
+            layer_weights["|".join(split["test"])] = torch.softmax(
+                sd["predictor.layer_sum.logits"], dim=0).tolist()
+        open(embedding_path.joinpath("layer_weights.json"), "wt").write(json.dumps(layer_weights, indent=2))
 
     # Aggregate scores over folds
     if len(test_results) > 1:

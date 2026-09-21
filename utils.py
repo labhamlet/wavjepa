@@ -12,16 +12,28 @@ def get_identity_from_cfg(cfg):
         cfg.trainer.get("num_gpus"),
         cfg.optimizer.get("lr"),
     )
-    # configs/masker/AudioSet.yaml uses ``context_mask_prob`` / ``context_mask_length``;
-    # older configs used ``context_prob`` / ``context_len``. Accept both.
-    identity += "TargetProb={}_TargetLen={}_ContextProb={}_ContextLen={}_MinContextBlock={}_ContextRatio={}_".format(
-        cfg.masker.get("target_prob", 0.25),
-        cfg.masker.get("target_length", 10),
-        cfg.masker.get("context_mask_prob", cfg.masker.get("context_prob", 0.65)),
-        cfg.masker.get("context_mask_length", cfg.masker.get("context_len", 10)),
-        cfg.masker.get("min_context_len", 1),
-        cfg.masker.get("ratio_cutoff", 0.1),
-    )
+    masker_name = str(cfg.masker.get("name", "time-inverse"))
+    if masker_name == "time-inverse":
+        # configs/masker/AudioSet.yaml uses ``context_mask_prob`` / ``context_mask_length``;
+        # older configs used ``context_prob`` / ``context_len``. Accept both.
+        identity += "TargetProb={}_TargetLen={}_ContextProb={}_ContextLen={}_MinContextBlock={}_ContextRatio={}_".format(
+            cfg.masker.get("target_prob", 0.25),
+            cfg.masker.get("target_length", 10),
+            cfg.masker.get("context_mask_prob", cfg.masker.get("context_prob", 0.65)),
+            cfg.masker.get("context_mask_length", cfg.masker.get("context_len", 10)),
+            cfg.masker.get("min_context_len", 1),
+            cfg.masker.get("ratio_cutoff", 0.1),
+        )
+    else:
+        # data2vec 2.0 block masking (configs/masker/D2v2Block.yaml): its own parameters instead of the paper masker's,
+        # so the run directory can never collide with a time-inverse run of the same objective / batch.
+        identity += "Masker={}_B={}_R={}_A={}_Inv={}_".format(
+            masker_name.replace("-", ""),
+            cfg.masker.get("mask_length", 5),
+            cfg.masker.get("mask_prob", 0.5),
+            cfg.masker.get("mask_prob_adjust", 0.05),
+            bool(cfg.masker.get("inverse_mask", False)),
+        )
     identity += "Packed={}".format(
         cfg.trainer.get("use_packing", True),
     )
@@ -38,6 +50,10 @@ def get_identity_from_cfg(cfg):
             identity += "_D2v2Dec={}x{}".format(
                 cfg.trainer.get("d2v2_decoder_layers", 20), cfg.trainer.get("d2v2_decoder_kernel", 7)
             )
+        # masks per clip (data2vec 2.0's clone_batch); the existing D runs used 4 and keep their names
+        masks_per_clip = int(cfg.trainer.get("d2v2_masks_per_clip", 4))
+        if masks_per_clip != 4:
+            identity += "_D2v2M={}".format(masks_per_clip)
     top_k = cfg.trainer.get("average_top_k_layers", 8)
     if int(top_k) != 8:
         identity += "_TopK={}".format(top_k)

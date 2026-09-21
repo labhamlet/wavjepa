@@ -26,6 +26,8 @@ prefetch_factor: 4
 #   B  objective=latent                    masked encoder (context tokens + mask tokens), EMA teacher top-K targets, no predictor
 #   C  objective=bestrq                    masked encoder, cross-entropy on frozen random-projection labels of the log-mel input
 objective: jepa
+# E6: number of transformer blocks in the predictor (384-d); 12 = the paper. Run identity gets _PredDepth=<n> when != 12.
+predictor_layers: 12
 bestrq_codebook_size: 8192
 bestrq_code_dim: 16
 bestrq_n_mels: 80

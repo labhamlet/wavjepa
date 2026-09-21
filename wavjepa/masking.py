@@ -305,3 +305,116 @@ class TimeInverseBlockMasker(nn.Module):
                                               "B C N S -> B N (S C)")
 
         return final_context_mask, target_positions, combined_visible_mask.to(torch.bool)
+
+
+class D2v2BlockMasker(nn.Module):
+    """
+    data2vec 2.0's block / inverse block masking for 1-D sequences (Baevski et al. 2023, section 3.4): the
+    on-device, vectorised equivalent of fairseq's ``compute_block_mask_1d`` (``fairseq/data/data_utils.py``) with
+    the options the released speech recipe uses (``non_overlapping=False``, ``expand_adjcent=False``,
+    ``mask_dropout=0``, ``require_same_masks=True``). Per row of length ``L``:
+
+    1. ``p = 1 - R`` for inverse masking (the blocks are the KEPT time-steps), ``p = R`` otherwise (the blocks
+       are the MASKED time-steps);
+    2. ``int(L * (p + A) / B)`` block centres are drawn uniformly WITH replacement (``torch.randint``; duplicates
+       collapse and blocks may overlap: "we allow blocks to overlap, which results in over-masking");
+    3. every centre ``c`` expands to the ``B`` positions ``c - B//2 .. c - B//2 + B - 1`` (clamped to the row);
+    4. the row is adjusted to exactly ``int(L * p)`` block positions by randomly un-setting excess positions or
+       setting missing ones ("we randomly choose individual time-steps to mask or unmask until we reached the
+       desired number of unmasked time-steps");
+    5. inverse: the mask is flipped, so the kept blocks are the context and everything else is masked.
+
+    Released speech configuration (``examples/data2vec/config/v2/base_audio_only_task.yaml``): R = 0.5, B = 5
+    (20 ms tokens, i.e. 100 ms), A = 0.05, ``inverse_mask: false`` (the paper: for 1-D data "block masking /
+    inverse block masking perform similarly due to symmetry"); the paper's Table 8 (speech Base) lists B = 5,
+    R = 0.5, A = 0.05 and M = 8 masks per sample (``clone_batch``).
+
+    Output convention as :class:`TimeInverseBlockMasker`: ``ctx_mask (B, S)`` True = masked (NOT context). For the
+    ``d2v2`` objective every masked position is a prediction target, so ``tgt_mask = ctx_mask[:, None]`` (N = 1)
+    and ``ctx_tgt_mask`` is all-False (both unused by that objective).
+
+    Args:
+        mask_prob: R, the mask ratio.
+        mask_length: B, the block width in tokens (5 x 20 ms in the paper = 100 ms = 10 tokens at 100 Hz).
+        mask_prob_adjust: A.
+        inverse_mask: sample the KEPT blocks (paper section 3.4) instead of the masked ones (released config).
+        require_same_masks: step 4 (fairseq passes True from the audio dataset).
+        channel_based_masking: repeat the mask over ``in_channels`` and flatten as ``(S C)`` (as the other masker).
+    """
+
+    def __init__(
+        self,
+        mask_prob: float = 0.5,
+        mask_length: int = 5,
+        mask_prob_adjust: float = 0.05,
+        inverse_mask: bool = False,
+        require_same_masks: bool = True,
+        channel_based_masking: bool = False,
+        **kwargs,
+    ):
+        super().__init__()  # type: ignore
+        if not 0.0 < mask_prob < 1.0:
+            raise ValueError(f"mask_prob must be in (0, 1), got {mask_prob}")
+        if int(mask_length) < 1:
+            raise ValueError(f"mask_length must be >= 1, got {mask_length}")
+        self.mask_prob = float(mask_prob)
+        self.mask_length = int(mask_length)
+        self.mask_prob_adjust = float(mask_prob_adjust)
+        self.inverse_mask = bool(inverse_mask)
+        self.require_same_masks = bool(require_same_masks)
+        self.channel_based_masking = bool(channel_based_masking)
+
+    def block_mask(
+        self, batch_size: int, sz: int, device: torch.device, generator: torch.Generator | None = None
+    ) -> torch.Tensor:
+        """``compute_block_mask_1d((batch_size, sz), ...)`` -> (batch_size, sz) bool, True = masked."""
+        B, L = int(batch_size), int(self.mask_length)
+        p = 1.0 - self.mask_prob if self.inverse_mask else self.mask_prob
+        n_centers = int(sz * ((p + self.mask_prob_adjust) / L))          # fairseq: int(L * ((mask_prob + adjust) / mask_length))
+        mask = torch.zeros(B, sz, dtype=torch.bool, device=device)
+        if n_centers > 0:
+            centers = torch.randint(0, sz, (B, n_centers), device=device, generator=generator)
+            offsets = torch.arange(L, device=device) - L // 2               # fairseq: k1 = i - mask_length // 2
+            pos = (centers[:, :, None] + offsets[None, None, :]).clamp_(0, sz - 1).reshape(B, -1)
+            mask.scatter_(1, pos, torch.ones_like(pos, dtype=torch.bool))
+        if self.require_same_masks:
+            target = int(sz * p)                                             # fairseq: final_target_len = int(L * mask_prob)
+            n = mask.sum(dim=1)
+            keys = torch.rand(B, sz, device=device, generator=generator)
+            # uniform random subsets via random keys: rank among the set / unset positions of the row
+            rank_set = keys.masked_fill(~mask, 2.0).argsort(dim=1).argsort(dim=1)
+            rank_unset = keys.masked_fill(mask, 2.0).argsort(dim=1).argsort(dim=1)
+            excess = (n - target).clamp(min=0)[:, None]                      # multinomial(m, n - target): un-set
+            deficit = (target - n).clamp(min=0)[:, None]                     # multinomial(1 - m, target - n): set
+            mask = (mask & ~(rank_set < excess)) | (~mask & (rank_unset < deficit))
+        if self.inverse_mask:
+            mask = ~mask
+        return mask
+
+    def sample(
+        self,
+        batch_size: int,
+        n_times: int,
+        in_channels: int = 1,
+        device: torch.device | str | None = None,
+        generator: torch.Generator | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Same signature / return convention as :meth:`TimeInverseBlockMasker.sample`."""
+        if device is None:
+            device = generator.device if generator is not None else torch.device("cpu")
+        device = torch.device(device)
+        if generator is not None and torch.device(generator.device).type != device.type:
+            raise ValueError(f"generator device {generator.device} does not match device {device}")
+        sz = n_times // in_channels
+        ctx_mask = self.block_mask(batch_size, sz, device, generator)      # (B, S) True = masked
+        tgt_mask = ctx_mask.unsqueeze(1)                                    # (B, 1, S): every masked position is a target
+        ctx_tgt_mask = torch.zeros_like(tgt_mask)                           # nothing hidden from the decoder
+        if self.channel_based_masking:
+            ctx_mask = rearrange(repeat(ctx_mask, "B S -> B C S", C=in_channels), "B C S -> B (S C)")
+            tgt_mask = rearrange(repeat(tgt_mask, "B N S -> B C N S", C=in_channels), "B C N S -> B N (S C)")
+            ctx_tgt_mask = rearrange(repeat(ctx_tgt_mask, "B N S -> B C N S", C=in_channels), "B C N S -> B N (S C)")
+        return ctx_mask, tgt_mask, ctx_tgt_mask
+
+    def forward(self, batch_size: int, n_times: int, in_channels: int):
+        """Loop-free CPU version for the legacy loader path (same outputs as :meth:`sample`)."""
+        return self.sample(batch_size, n_times, in_channels=in_channels, device="cpu")

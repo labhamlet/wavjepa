@@ -1,0 +1,13 @@
+# data2vec 2.0's block masking for the d2v2 objective (wavjepa/masking.py: D2v2BlockMasker = fairseq compute_block_mask_1d).
+# Values are the released speech recipe (fairseq examples/data2vec/config/v2/base_audio_only_task.yaml, paper Table 8):
+# R = 0.5, A = 0.05, B = 5 tokens of 20 ms = 100 ms; at the 100 Hz WavJEPA front end the same 100 ms is 10 tokens.
+# The released config sets inverse_mask: false (paper: 1-D block / inverse block masking behave the same by symmetry);
+# inverse_mask: true samples the KEPT blocks as in the paper's section 3.4.
+# Pair with trainer.d2v2_masks_per_clip=8 (the paper's M = 8).
+name: d2v2-block
+mask_prob: 0.5
+mask_length: 10
+mask_prob_adjust: 0.05
+inverse_mask: false
+require_same_masks: true
+channel_based_masking: false

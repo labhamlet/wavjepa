@@ -13,7 +13,7 @@ from utils import get_identity_from_cfg
 from data_modules import WebAudioDataModule
 
 from wavjepa.jepa import JEPA
-from wavjepa.masking import TimeInverseBlockMasker
+from wavjepa.masking import D2v2BlockMasker, TimeInverseBlockMasker
 from wavjepa.extractors import ConvFeatureExtractor, Extractor
 from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 
@@ -23,6 +23,7 @@ from wavjepa.types import TransformerEncoderCFG, TransformerLayerCFG
 NETWORKS = {"JEPA": JEPA}
 MASKERS = {
     "time-inverse": TimeInverseBlockMasker,
+    "d2v2-block": D2v2BlockMasker,   # data2vec 2.0's (inverse) block masking (configs/masker/D2v2Block.yaml); objective=d2v2 only
 }
 EXTRACTORS = {
     "wav2vec2": ConvFeatureExtractor,
@@ -128,8 +129,19 @@ class ComponentFactory:
                     ratio_cutoff=cfg.masker.ratio_cutoff,
                     channel_based_masking=cfg.masker.channel_based_masking,
                 )
-        else:
-            raise Exception("No masker found")
+        if cfg.masker.name == "d2v2-block":
+            if str(cfg.trainer.get("objective", "jepa")) != "d2v2":
+                raise ValueError("masker=D2v2Block (data2vec 2.0 block masking) only defines a context set, so it is "
+                                 "only usable with trainer.objective=d2v2")
+            return D2v2BlockMasker(
+                mask_prob=cfg.masker.mask_prob,
+                mask_length=cfg.masker.mask_length,
+                mask_prob_adjust=cfg.masker.get("mask_prob_adjust", 0.05),
+                inverse_mask=cfg.masker.get("inverse_mask", False),
+                require_same_masks=cfg.masker.get("require_same_masks", True),
+                channel_based_masking=cfg.masker.get("channel_based_masking", False),
+            )
+        raise Exception("No masker found")
 
 
     @staticmethod
@@ -225,6 +237,13 @@ def setup_callbacks(cfg):
 def setup_trainer(cfg, logger, callbacks) -> pl.Trainer:
     """Set up PyTorch Lightning trainer with proper configuration."""
     num_gpus = int(cfg.trainer.num_gpus)
+    # Multi-GPU: arms whose loss never touches arm A's predictor (self.decoder, mask_token, the two width mappers) --
+    # latent / bestrq (masked encoder, no predictor) and d2v2 with the conv decoder -- trip DDP's unused-parameter check,
+    # so they need the find_unused_parameters variant (a small per-step overhead; the 1-GPU path is unaffected).
+    objective = str(cfg.trainer.get("objective", "jepa"))
+    predictor_unused = objective in ("latent", "bestrq") or (
+        objective == "d2v2" and str(cfg.trainer.get("d2v2_decoder_type", "transformer")) == "conv")
+    strategy = "auto" if num_gpus <= 1 else ("ddp_find_unused_parameters_true" if predictor_unused else "ddp")
 
     return pl.Trainer(
         logger=logger,
@@ -241,7 +260,7 @@ def setup_trainer(cfg, logger, callbacks) -> pl.Trainer:
         devices=num_gpus,
         gradient_clip_val=5,
         gradient_clip_algorithm = "norm",
-        strategy="ddp" if num_gpus > 1 else "auto",
+        strategy=strategy,
         # Gradient accumulation keeps the effective batch (clips per optimizer step) when the
         # per-GPU micro-batch has to shrink for memory; the EMA update follows optimizer steps.
         accumulate_grad_batches=int(cfg.trainer.get("accumulate_grad_batches", 1)),

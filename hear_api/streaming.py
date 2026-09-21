@@ -94,6 +94,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 try:
@@ -326,7 +327,8 @@ class BEATsWindowModel(WindowModel):
     N_MEL = 128
     BAND_POOLS = ("mean", "concat")
 
-    def __init__(self, beats: nn.Module, band_pool: str = "mean", name: str = "beats") -> None:
+    def __init__(self, beats: nn.Module, band_pool: str = "mean", name: str = "beats",
+                 layers: Optional[Sequence[int]] = None) -> None:
         super().__init__()
         if band_pool not in self.BAND_POOLS:
             raise ValueError(f"band_pool must be one of {self.BAND_POOLS}, got {band_pool!r}")
@@ -339,7 +341,13 @@ class BEATsWindowModel(WindowModel):
             raise ValueError(f"input_patch_size {self.patch} does not divide {self.N_MEL} mel bins")
         self.bands = self.N_MEL // self.patch  # 8 band tokens per time patch
         self.token_dim = int(beats.cfg.encoder_embed_dim)
-        self.embedding_dim = self.token_dim if band_pool == "mean" else self.token_dim * self.bands
+        # ``layers`` (1-based transformer blocks): concatenate those blocks' outputs, each through a parameter-free
+        # LayerNorm, instead of the encoder's final output -- the same layer-wise probe as RuntimeJEPA(layers=...).
+        self.layers = tuple(int(i) for i in layers) if layers else None
+        if self.layers and (min(self.layers) < 1 or max(self.layers) > len(beats.encoder.layers)):
+            raise ValueError(f"layers must be within 1..{len(beats.encoder.layers)}, got {sorted(self.layers)}")
+        n_parts = len(self.layers) if self.layers else 1
+        self.embedding_dim = self.token_dim * n_parts * (1 if band_pool == "mean" else self.bands)
         self.hop = self.FBANK_HOP * self.patch  # 2560 samples = 160 ms per time patch
         self.rf = self.FBANK_WINDOW + (self.patch - 1) * self.FBANK_HOP  # 2800 samples = 175 ms
         self.centre_offset = self.patch * self.FBANK_HOP / 2.0  # (16 j + 8) x 10 ms -> 1280 samples = 80 ms
@@ -376,12 +384,30 @@ class BEATsWindowModel(WindowModel):
             return grid.mean(dim=2)
         return grid.reshape(batch, n_frames, self.bands * tokens.shape[-1])
 
+    def layer_tokens(self, wave: torch.Tensor) -> torch.Tensor:
+        """``BEATs.extract_features`` up to the encoder, then the requested blocks' outputs concatenated
+        (``(B, 8 * n, len(layers) * Dt)``). ``encoder(x, layer=k)`` fills ``layer_results`` with the input plus every
+        block's output (fairseq ``T x B x C``), stopping after block k; block ``l`` (1-based) is entry ``l``."""
+        b = self.beats
+        fbank = b.preprocess(wave).unsqueeze(1)
+        feats = b.patch_embedding(fbank)
+        feats = feats.reshape(feats.shape[0], feats.shape[1], -1).transpose(1, 2)
+        feats = b.layer_norm(feats)
+        if b.post_extract_proj is not None:
+            feats = b.post_extract_proj(feats)
+        _, layer_results = b.encoder(b.dropout_input(feats), padding_mask=None, layer=max(self.layers) - 1)
+        outs = [layer_results[l][0].transpose(0, 1) for l in self.layers]  # T x B x C -> B x T x C
+        return torch.cat([F.layer_norm(o.float(), o.shape[-1:]).type_as(o) for o in outs], dim=-1)
+
     def embed_window(self, wave: torch.Tensor) -> torch.Tensor:
         n_real = self.n_frames(int(wave.shape[-1]))
         if n_real == 0:
             return wave.new_zeros((wave.shape[0], 0, self.embedding_dim))
         with torch.inference_mode():
-            tokens = self.beats.extract_features(wave.to(self.device), padding_mask=None)[0]
+            if self.layers:
+                tokens = self.layer_tokens(wave.to(self.device))
+            else:
+                tokens = self.beats.extract_features(wave.to(self.device), padding_mask=None)[0]
         return self.pool_tokens(tokens, n_real)
 
 
